@@ -1,0 +1,25 @@
+MR Texture Editor - SOURCE
+==========================
+Modes: Textures (PNG replace) + VFX/Mesh material recolor (color/scalar params). One build
+packs all staged edits into a single mod. Big runtime binaries (retoc, texconv, usmap) are
+in the distribution build (MRTextureEditor_Alpha.zip), not here.
+
+FILES
+  tex_editor_app.py   Entry point: pywebview window + local HTTP server (port 8766).
+  tex_app.py          The editor: texture decode/replace + material (MI) param editing + build.
+  mr_app.py           Shared config + IoStore/Zen helpers (PAKS/TOOLS, retoc calls).
+  img_data.py         Embedded UI image (hidden import).
+  _work/io_lib.py     .utoc/.ucas parser + Oodle + chunk reader.
+  templates/          Cooked single-mip texture templates + registry.json.
+  MRTextureEditor.spec PyInstaller build spec.
+
+RUN FROM SOURCE
+  python -m pip install pywebview pillow
+  Place at project root next to Tools\ (retoc-rivals-cli + oo2core dll, texconv.exe,
+  Mappings\*.usmap) and a Marvel Rivals Paks folder (auto-detected or set in Paths panel).
+  python tex_editor_app.py
+
+BUILD THE EXE
+  python -m pip install pyinstaller
+  python -m PyInstaller --noconfirm MRTextureEditor.spec   ->  dist\MRTextureEditor.exe
+  Ship next to Tools\, templates\, _work\io_lib.py.

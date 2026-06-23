@@ -3,7 +3,7 @@ Sibling of mr_app.py: reuses its config (Paks + tools), io_lib, retoc pipeline, 
 Run: python tex_app.py   (dev)   or via tex_editor_app.py / the built EXE."""
 import os, sys, glob, re, struct, io, json, http.server, socketserver, threading, webbrowser, shutil, hashlib, base64, zipfile
 ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
-os.chdir(ROOT); sys.path.insert(0, ROOT); sys.path.insert(0, ROOT + "/_work")
+os.chdir(ROOT); sys.path.insert(0, ROOT)
 import mr_app  # reuse: config (PAKS/TOOLS), _run, io_lib, RETOC/UAG/CNW, ensure_mapping
 from urllib.parse import urlparse, parse_qs
 from PIL import Image

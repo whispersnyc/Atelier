@@ -1,7 +1,8 @@
 import struct, ctypes, os
 
-AES_KEY = bytes.fromhex("REDACTED")
-_TOOLS = os.environ.get("MR_TOOLS") or os.path.join(os.path.dirname(__file__), "..", "Tools")
+_TOOLS = os.environ.get("MR_TOOLS") or os.path.join(os.path.dirname(__file__), "Tools")
+if os.path.exists(AES_PATH := os.path.join(_TOOLS, "AES_KEY.txt")):
+    with open(AES_PATH) as AES_FILE: AES_KEY = bytes.fromhex(AES_FILE.read())
 OODLE = os.path.join(_TOOLS, "retoc-rivals-cli", "oo2core_9_win64.dll")
 _oo = ctypes.WinDLL(os.path.abspath(OODLE))
 _oo.OodleLZ_Decompress.restype = ctypes.c_int64

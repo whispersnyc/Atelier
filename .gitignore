@@ -220,6 +220,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Custom for this project
-_work/tex_cache/
 Tools/
 extracted/
+_work/
+assets/

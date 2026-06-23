@@ -2,7 +2,7 @@
 import http.server, socketserver, json, os, sys, glob, re, struct, hashlib, shutil, subprocess, threading, webbrowser, base64, datetime
 from urllib.parse import urlparse, parse_qs
 ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
-os.chdir(ROOT); sys.path.insert(0, ROOT + "/_work"); sys.path.insert(0, ROOT)
+os.chdir(ROOT); sys.path.insert(0, ROOT)
 try:
     from img_data import IMG_B64
 except Exception:

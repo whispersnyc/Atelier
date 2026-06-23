@@ -7,7 +7,7 @@ os.chdir(ROOT); sys.path.insert(0, ROOT); sys.path.insert(0, ROOT + "/_work")
 import mr_app  # reuse: config (PAKS/TOOLS), _run, io_lib, RETOC/UAG/CNW, ensure_mapping
 from urllib.parse import urlparse, parse_qs
 from PIL import Image
-io_lib, _run = mr_app.io_lib, mr_app._run
+io_lib, _run, _dbg = mr_app.io_lib, mr_app._run, mr_app._dbg
 PAKS, TOOLS, RETOC, UAG, CNW = mr_app.PAKS, mr_app.TOOLS, mr_app.RETOC, mr_app.UAG, mr_app.CNW
 PORT = 8766
 TCACHE = "_work/tex_cache"
@@ -74,7 +74,7 @@ def _skin_key(path):
     m = re.search(r"/Characters/([^/]+)/([^/]+)/", path, re.I)
     return f"{m.group(1)}/{m.group(2)}" if m else "_misc"
 def ensure_skin(skinkey):
-    """Unpack ALL of a skin's textures in ONE retoc call (no --game-paks-dir - textures don't need it). Cached + locked."""
+    """Unpack ALL of a skin's textures in ONE retoc call. Used only by extractAll."""
     sd = f"{TCACHE}/s_{hashlib.md5(skinkey.encode()).hexdigest()[:12]}"
     if os.path.exists(sd + "/.done"): return sd
     with _skinguard:
@@ -92,6 +92,21 @@ def ensure_skin(skinkey):
                 _run([RETOC, "unpack", f"{PAKS}/{cont}"] + flt + ["-o", sd])
         open(sd + "/.done", "w").write("1")
     return sd
+_texlocks = {}; _texguard = threading.Lock()
+def _ensure_one(cont, path):
+    """Extract just the single requested texture (uasset+uexp+ubulk). Falls back to skin-level cache if already present."""
+    skinsd = f"{TCACHE}/s_{hashlib.md5(_skin_key(path).encode()).hexdigest()[:12]}"
+    if os.path.exists(skinsd + "/.done"): return skinsd
+    key = _key(path); sd = f"{TCACHE}/t_{key}"
+    if os.path.exists(sd + "/.done"): return sd
+    with _texguard:
+        lock = _texlocks.setdefault(key, threading.Lock())
+    with lock:
+        if os.path.exists(sd + "/.done"): return sd
+        os.makedirs(sd, exist_ok=True)
+        _run([RETOC, "unpack", f"{PAKS}/{cont}", "--filter", path, "-o", sd])
+        open(sd + "/.done", "w").write("1")
+    return sd
 def _rel(path):
     """Container path -> canonical mount-relative path (strips leading ../../../ and the .uasset ext).
     e.g. '../../../Marvel/Content/.../T_x.uasset' -> 'Marvel/Content/.../T_x'. Forward slashes."""
@@ -107,7 +122,7 @@ def _locate(sd, path):
 
 def tex_info(cont, path):
     """Return {fmt, w, h, ua, uexp, ubulk}."""
-    sd = ensure_skin(_skin_key(path))
+    sd = _ensure_one(cont, path)
     b = _locate(sd, path)
     if not b: raise RuntimeError("texture not found after unpack")
     uexp = b + ".uexp"; asset = b + ".uasset"; ubulk = b + ".ubulk"
@@ -313,7 +328,7 @@ def build_texture(cont, path, image_bytes):
     if len(mip0) != sz: return {"ok": False, "msg": f"encoded mip0 {len(mip0)} != expected {sz}"}
     orig = open(inf["ubulk"], "rb").read()
     newbulk = mip0 + orig[sz:]   # replace top mip, keep the streamed lower mips
-    sd = ensure_skin(_skin_key(path)); src = _locate(sd, path); rel = _rel(path); name = os.path.basename(rel)
+    sd = _ensure_one(cont, path); src = _locate(sd, path); rel = _rel(path); name = os.path.basename(rel)
     stage = f"{TCACHE}/bstage/{name}"; shutil.rmtree(f"{TCACHE}/bstage", ignore_errors=True)
     dst = f"{stage}/{rel}"; os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy(src + ".uasset", dst + ".uasset"); shutil.copy(src + ".uexp", dst + ".uexp")
@@ -398,20 +413,41 @@ def _named(lst, n):
     return None
 def _vfx_unpack(cont, path):
     d = f"{TCACHE}/vfx_{_key(path)}"; base = os.path.join(d, *_rel(path).split("/"))
-    if os.path.exists(base + ".uexp"): return base
+    if os.path.exists(base + ".uexp"): _dbg("vfx_unpack", f"cache_hit {base!r}"); return base
     os.makedirs(d, exist_ok=True)
-    _run([RETOC, "unpack", f"{PAKS}/{cont}", "--filter", path, "-o", d])
-    return base if os.path.exists(base + ".uexp") else None
+    cmd = [RETOC, "unpack", f"{PAKS}/{cont}", "--filter", path, "-o", d]
+    _dbg("vfx_unpack", f"CMD {cmd}")
+    r = _run(cmd)
+    ok = os.path.exists(base + ".uexp")
+    _dbg("vfx_unpack", f"rc={r.returncode} uexp_exists={ok}")
+    if r.stdout: _dbg("vfx_unpack", f"stdout={r.stdout[:400]!r}")
+    if r.stderr: _dbg("vfx_unpack", f"stderr={r.stderr[:400]!r}")
+    return base if ok else None
 def _vfx_json(cont, path):
     base = _vfx_unpack(cont, path)
     if not base: raise RuntimeError("unpack failed")
     j = base + ".uag.json"
-    if not os.path.exists(j): _run([UAG, "tojson", base + ".uasset", j, "VER_UE5_3", "Marvel_S8.5"])
+    if not os.path.exists(j):
+        _dbg("vfx_json", f"UAG tojson {base+'.uasset'!r}  usmap={mr_app._USMAP_PATH!r}")
+        r = _run([UAG, "tojson", base + ".uasset", j, "VER_UE5_3", mr_app._USMAP_PATH])
+        _dbg("vfx_json", f"rc={r.returncode} json_exists={os.path.exists(j)}")
+        if r.stdout: _dbg("vfx_json", f"stdout={r.stdout[:400]!r}")
+        if r.stderr: _dbg("vfx_json", f"stderr={r.stderr[:400]!r}")
+    else:
+        _dbg("vfx_json", f"cache_hit {j!r}")
     return base, j
 def _mi_params(d):
     """Return (colors, scalars) from a UAG MaterialInstance json dict."""
+    if "Exports" not in d:
+        _dbg("mi_params", f"no Exports key; root_keys={list(d.keys())[:8]}")
+        return [], []
     ex = d["Exports"][0]
-    vp = _named(_ex_props(ex), "VectorParameterValues"); sp = _named(_ex_props(ex), "ScalarParameterValues")
+    _dbg("mi_params", f"export_$type={ex.get('$type','?')!r}  ex_keys={list(ex.keys())[:6]}")
+    props = _ex_props(ex)
+    _dbg("mi_params", f"_ex_props type={type(props).__name__}  len={len(props) if isinstance(props,(list,str)) else '?'}")
+    if isinstance(props, str): _dbg("mi_params", "RAWEXPORT — Data is base64 string, mapping missing or wrong")
+    vp = _named(props, "VectorParameterValues"); sp = _named(props, "ScalarParameterValues")
+    _dbg("mi_params", f"vp_found={vp is not None} sp_found={sp is not None}")
     colors = []; scalars = []
     for e in (vp or {}).get("Value", []):
         pin = _named(e["Value"], "ParameterInfo"); nm = (_named(pin["Value"], "Name") or {}).get("Value") if pin else None
@@ -426,6 +462,7 @@ def _mi_params(d):
         try: val = float(val)
         except (TypeError, ValueError): continue
         if nm: scalars.append({"name": nm, "value": round(val, 5)})
+    _dbg("mi_params", f"result: {len(colors)} colors, {len(scalars)} scalars")
     return colors, scalars
 def vfx_params(cont, path):
     base, j = _vfx_json(cont, path)
@@ -495,7 +532,7 @@ def _stage_vfx_one(stage, e):
     d = json.load(open(j, encoding="utf-8"))
     _apply_mi_edits(d, e.get("colors", {}), e.get("scalars", {}))
     ej = base + ".edit.json"; json.dump(d, open(ej, "w"))
-    _run([UAG, "fromjson", ej, base + ".edit.uasset", "Marvel_S8.5"])   # writes .edit.uasset + .edit.uexp
+    _run([UAG, "fromjson", ej, base + ".edit.uasset", mr_app._USMAP_PATH])   # writes .edit.uasset + .edit.uexp
     if not os.path.exists(base + ".edit.uexp"): raise RuntimeError("fromjson produced no uexp")
     rel = _rel(e["path"]); dst = f"{stage}/{rel}"; os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy(base + ".uasset", dst + ".uasset")    # VANILLA uasset (UAG's is hash-corrupt)
@@ -593,7 +630,9 @@ button{cursor:pointer}button:hover{border-color:#9a9ac0}.sw{margin-left:auto;col
 <button id=exb onclick=extractAll()>Extract all PNG</button><button class=go id=bbtn onclick=doBuild()>Build mod (0)</button>
 <button onclick=clearStaged() title="unstage everything (textures + VFX)">Clear</button>
 <button onclick=clearCache() title="wipe cached indexes + previews and re-scan the game (keeps staged edits)">Clear cache</button>
-<button onclick=openCfg()>Paths</button><span class=sw id=sw></span></div>
+<button onclick=openCfg()>Paths</button>
+<label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--mut);font-size:12px;white-space:nowrap"><input type=checkbox id=auto_load onchange="AUTO_LOAD=this.checked;renderActive()"> Load Automatically</label>
+<span class=sw id=sw></span></div>
 <div id=cfg class=cfg>
   <h3>Paths</h3>
   <div class=sw>Point these at YOUR machine, then restart the app to apply.</div>
@@ -618,6 +657,7 @@ button{cursor:pointer}button:hover{border-color:#9a9ac0}.sw{margin-left:auto;col
 <script>
 let IDX={},CUR=null,MODE='tex';
 let VFXIDX=null,MATIDX=null,AIDX=null,VCUR=null,VEDITS={},MICUR=null;
+let AUTO_LOAD=false;
 let BUSY=0;function busy(d){BUSY=Math.max(0,BUSY+d);document.getElementById('lb').classList.toggle('on',BUSY>0);}
 async function J(u){return (await fetch(u)).json();}
 async function openCfg(){const c=await J('/api/config');
@@ -641,7 +681,7 @@ function render(){const g=document.getElementById('grid');if(!CUR){g.textContent
 const q=document.getElementById('q').value.toLowerCase();
 const tx=CUR.textures.filter(t=>!q||t.name.toLowerCase().includes(q));
 g.innerHTML=tx.map(t=>`<div class="card${EDITS[t.path]?' ed':''}" onclick='zoom(${JSON.stringify(t.cont)},${JSON.stringify(t.path)},${JSON.stringify(t.name)})'>
-<img loading=lazy src="/api/preview?cont=${t.cont}&path=${encodeURIComponent(t.path)}" onerror="this.style.opacity=.25">
+<img ${AUTO_LOAD?`loading=lazy src="/api/preview?cont=${t.cont}&path=${encodeURIComponent(t.path)}" onerror="this.style.opacity=.25"`:``}>
 <div class=n title="${t.name}">${EDITS[t.path]?'* ':''}${t.name}</div></div>`).join('')||'No match';}
 let MCUR=null;
 function zoom(cont,path,name){MCUR={cont,path,name};const ep=encodeURIComponent(path);document.getElementById('mtitle').textContent=name;
@@ -664,8 +704,8 @@ function renderActive(){MODE==='tex'?render():renderMats();}
 function doBuild(){buildAll();}
 function clearStaged(){EDITS={};VEDITS={};updBuild();renderActive();document.getElementById('status').textContent='Cleared all staged edits.';}
 async function clearCache(){busy(1);try{const r=await J('/api/clearcache');
-IDX=await J('/api/skins');if(VFXIDX)VFXIDX=await J('/api/vfx');
-if(MODE==='vfx')loadVfx();else load();
+IDX=await J('/api/skins');if(VFXIDX)VFXIDX=await J('/api/vfx');if(MATIDX)MATIDX=await J('/api/mats');
+if(MODE==='tex')load();else loadMatChar();
 document.getElementById('status').textContent='Cache cleared ('+r.removed+' items) and index rebuilt fresh. Staged edits kept.';
 }catch(e){document.getElementById('status').textContent='Error: '+e;}finally{busy(-1);}}
 function stage(){const f=document.getElementById('mfile').files[0];if(!f||!MCUR)return;
@@ -705,7 +745,7 @@ function renderMats(){const g=document.getElementById('grid');if(!VCUR){g.textCo
 const q=document.getElementById('q').value.toLowerCase();const grp=document.getElementById('skin').value;
 const ms=VCUR.mats.filter(m=>(!grp||m.group===grp)&&(!q||m.name.toLowerCase().includes(q)));
 g.innerHTML=ms.map(m=>`<div class="card mi${VEDITS[m.path]?' ed':''}" onclick='openMi(${JSON.stringify(m.cont)},${JSON.stringify(m.path)},${JSON.stringify(m.name)})'>
-<img loading=lazy src="/api/vfx_mask?cont=${encodeURIComponent(m.cont)}&path=${encodeURIComponent(m.path)}" onerror="this.style.display='none'">
+<img ${AUTO_LOAD?`loading=lazy src="/api/vfx_mask?cont=${encodeURIComponent(m.cont)}&path=${encodeURIComponent(m.path)}" onerror="this.style.display='none'"`:``}>
 <div class=n title="${m.name}">${VEDITS[m.path]?'* ':''}${m.name}</div><div class=g title="${m.group}">${m.group}</div></div>`).join('')||'No match';}
 function hx2(c){return ('0'+Math.round(Math.min(255,Math.max(0,c*255))).toString(16)).slice(-2);}
 function rgbaHex(rgba,inten){const n=Math.max(inten,1e-6);return '#'+hx2(rgba[0]/n)+hx2(rgba[1]/n)+hx2(rgba[2]/n);}
@@ -775,6 +815,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 i = tex_info(q["cont"][0], q["path"][0]); self._s(200, {"fmt": i["fmt"], "w": i["w"], "h": i["h"]})
             elif u.path == "/api/extractall":
                 skin = q["skin"][0]; info = enum_textures().get(skin, {"textures": []})
+                ensure_skin(skin)  # batch-extract all textures in one retoc call before the per-texture decode loop
                 dest = os.path.join(EXTRACT_DIR, re.sub(r"\W+", "_", skin).strip("_")); os.makedirs(dest, exist_ok=True); n = 0
                 for t in info["textures"]:
                     try:

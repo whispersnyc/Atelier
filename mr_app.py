@@ -1,5 +1,5 @@
 """MR World Editor - local web app. Run: python mr_app.py"""
-import http.server, socketserver, json, os, sys, glob, re, struct, hashlib, shutil, subprocess, threading, webbrowser, base64
+import http.server, socketserver, json, os, sys, glob, re, struct, hashlib, shutil, subprocess, threading, webbrowser, base64, datetime
 from urllib.parse import urlparse, parse_qs
 ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT); sys.path.insert(0, ROOT + "/_work"); sys.path.insert(0, ROOT)
@@ -35,19 +35,45 @@ CNW = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW: child exes (reto
 def _run(args, **kw):
     kw.setdefault("cwd", ROOT); kw.setdefault("capture_output", True); kw.setdefault("creationflags", CNW)
     return subprocess.run(args, **kw)
+_LOG = os.path.join(ROOT, "_work", "debug.log")
+def _dbg(tag, *args):
+    os.makedirs(os.path.dirname(_LOG), exist_ok=True)
+    with open(_LOG, "a", encoding="utf-8") as _f:
+        _f.write(f"[{datetime.datetime.now():%H:%M:%S}][{tag}] {' '.join(str(a) for a in args)}\n")
 USMAP_DIR = ROOT + "/usmap"
 MAPPING = "Marvel_S8.5"
 def ensure_mapping():
-    """Failsafe: guarantee UAssetGUI has the S8.5 mapping; reinstall from the latest usmap in /usmap if it goes missing."""
-    dests = [os.path.join(TOOLS, "Mappings"), os.path.join(os.environ.get("LOCALAPPDATA", ""), "UAssetGUI", "Mappings")]
-    if any(d and os.path.exists(os.path.join(d, MAPPING + ".usmap")) for d in dests): return None
-    src = sorted(glob.glob(USMAP_DIR + "/*.usmap"))
+    """Guarantee UAssetGUI can find the S8.5 mapping at runtime.
+    UAG searches AppData/UAssetGUI/Mappings/ by name AND reads its config.json for PreferredMappings.
+    We must populate BOTH, and we also keep a copy in Tools/Mappings/ for the full-path CLI arg."""
+    tools_dir = os.path.join(TOOLS, "Mappings")
+    appdata_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "UAssetGUI", "Mappings")
+    tools_usmap = os.path.join(tools_dir, MAPPING + ".usmap")
+    appdata_usmap = os.path.join(appdata_dir, MAPPING + ".usmap") if appdata_dir != "/UAssetGUI/Mappings" else ""
+    # Locate the source .usmap (prefer already-copied Tools/Mappings/, then usmap/, then Tools/ root)
+    src = (tools_usmap if os.path.exists(tools_usmap) else None
+           or next(iter(sorted(glob.glob(USMAP_DIR + "/*.usmap"))), None)
+           or next(iter(sorted(glob.glob(os.path.join(TOOLS, "*.usmap")))), None))
     if not src: return None
-    for d in dests:
-        if d:
-            os.makedirs(d, exist_ok=True); shutil.copy(src[0], os.path.join(d, MAPPING + ".usmap"))
-    return src[0]
+    # Ensure Tools/Mappings/ copy (needed for the full-path CLI arg below)
+    if not os.path.exists(tools_usmap):
+        os.makedirs(tools_dir, exist_ok=True); shutil.copy(src, tools_usmap)
+    # Ensure AppData copy (UAG's name-based lookup at runtime)
+    if appdata_usmap and not os.path.exists(appdata_usmap):
+        os.makedirs(appdata_dir, exist_ok=True); shutil.copy(src, appdata_usmap)
+    # Patch UAG's config.json so PreferredMappings is always set correctly
+    cfg_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "UAssetGUI", "config.json")
+    if cfg_path and os.path.exists(cfg_path):
+        try:
+            cfg = json.load(open(cfg_path, encoding="utf-8"))
+            if cfg.get("PreferredMappings") != MAPPING:
+                cfg["PreferredMappings"] = MAPPING
+                json.dump(cfg, open(cfg_path, "w"), indent=2)
+        except Exception: pass
+    return tools_usmap
 ensure_mapping()
+# Full path to the .usmap — passed directly to UAG CLI so name resolution is bypassed entirely.
+_USMAP_PATH = os.path.join(TOOLS, "Mappings", MAPPING + ".usmap")
 GRADE_VEC = ["ColorSaturation", "ColorContrast", "ColorGain", "ColorOffset", "ColorGamma",
              "ColorSaturationShadows", "ColorContrastShadows", "ColorGainShadows",
              "ColorSaturationMidtones", "ColorSaturationHighlights"]
@@ -139,6 +165,7 @@ def _flat(props, vals, ov):
 
 def parse_model(jpath):
     d = json.load(open(jpath, encoding="utf-8"))
+    _dbg("parse_model", f"root_type={type(d).__name__} keys={list(d.keys())[:6] if isinstance(d, dict) else '(list)'}")
     imp = d.get("Imports", [])
     def cls(e):
         ci = e.get("ClassIndex", 0)
@@ -230,7 +257,13 @@ def _ensure_json(cont, path):
     if not os.path.exists(j):
         asset = _unpack_sub(cont, path)
         if not asset: raise RuntimeError("unpack produced no .uasset for " + path)
-        _run([UAG, "tojson", asset, j, "VER_UE5_3", "Marvel_S8.5"])
+        _dbg("ensure_json", f"UAG tojson {asset!r}  usmap={_USMAP_PATH!r}")
+        r = _run([UAG, "tojson", asset, j, "VER_UE5_3", _USMAP_PATH])
+        _dbg("ensure_json", f"rc={r.returncode} json_exists={os.path.exists(j)}")
+        if r.stdout: _dbg("ensure_json", f"stdout={r.stdout[:400]!r}")
+        if r.stderr: _dbg("ensure_json", f"stderr={r.stderr[:400]!r}")
+    else:
+        _dbg("ensure_json", f"cache_hit {j!r}")
     return j
 
 def load_model(cont, path):
@@ -275,10 +308,10 @@ def _mapviz_sub(cont, path):
     try: asset = _unpack_sub(cont, path)
     except Exception: return [], []
     if not asset: return [], []
-    j = f"{CACHE}/{re.sub(r'\W+', '_', path).strip('_')}.json"
+    key = re.sub(r"\W+", "_", path).strip("_"); j = f"{CACHE}/{key}.json"
     for attempt in range(3):
         if attempt or not os.path.exists(j):
-            _run([UAG, "tojson", asset, j, "VER_UE5_3", "Marvel_S8.5"])
+            _run([UAG, "tojson", asset, j, "VER_UE5_3", _USMAP_PATH])
         p, sp = _collect_points(j)
         if p or sp: return p, sp
     return [], []
@@ -295,7 +328,8 @@ def _seg_base(sub):
 def mapviz_points(mapname, sub=None):
     """Top-down point cloud for the segment the chosen sublevel belongs to (domination C01/C02/C03, S1/S2, etc.). Cached."""
     base = _seg_base(sub) if sub else mapname
-    ck = f"{CACHE}/mapviz_{re.sub(r'\W+', '_', mapname)}_{re.sub(r'\W+', '_', base)}.json"
+    mn_key = re.sub(r"\W+", "_", mapname); b_key = re.sub(r"\W+", "_", base)
+    ck = f"{CACHE}/mapviz_{mn_key}_{b_key}.json"
     if os.path.exists(ck): return json.load(open(ck, encoding="utf-8"))
     subs = enum_maps().get(mapname, [])
     EXCL = re.compile(r"(Audio|_SFX|Spatial|Collision|Nav|AIConfig|_Config$|SVON|Spectator|Music|Clone|CltOnly|_VFX|Destruction|Filling)", re.I)

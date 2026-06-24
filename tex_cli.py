@@ -25,13 +25,11 @@ Examples:
   python tex_cli.py export MagikWeapon "1029304/Texture/10290/T_1029304_10290_Weapon_*"
   python tex_cli.py export MagikWeapon "1029304/Textures/*" --dir D:/Mods --override
 """
-import os, sys, glob, re, fnmatch, shutil, subprocess, json, struct, io
-from PIL import Image
+import os, sys, glob, re, shutil, subprocess, json, threading, atexit
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
 sys.path.insert(0, ROOT)
-import io_lib
 
 # ── config ────────────────────────────────────────────────────────────────────
 def _load_config():
@@ -55,68 +53,71 @@ _cfg  = _load_config()
 TOOLS = _cfg.get("tools") or os.path.join(ROOT, "Tools")
 PAKS  = (_cfg.get("paks") or _detect_paks()).replace("\\", "/")
 os.environ["MR_TOOLS"] = TOOLS
+import io_lib   # imported AFTER MR_TOOLS is set, so io_lib resolves Tools/AES_KEY.txt (and works when frozen)
 
-RETOC       = os.path.join(TOOLS, "retoc-rivals-cli", "retoc-rivals-cli.exe")
-TEXCONV     = os.path.join(TOOLS, "texconv.exe")
+UAT         = os.path.join(TOOLS, "UAssetTool.exe")
+_usmaps     = sorted(glob.glob(os.path.join(TOOLS, "Mappings", "*.usmap")))
+USMAP       = next((u for u in _usmaps if "_latest" not in os.path.basename(u).lower()), _usmaps[0] if _usmaps else "")
 CNW         = 0x08000000 if os.name == "nt" else 0
 ASSETS      = os.path.join(ROOT, "assets")
 ASSETS_MODS = os.path.join(ROOT, "assets", "mods")
-TPL_DIR     = os.path.join(ROOT, "templates")
 _WORK       = os.path.join(ROOT, "_work")
 
-_TCFMT = {"DXT1": "BC1_UNORM", "DXT5": "BC3_UNORM", "BC4": "BC4_UNORM",
-           "BC5": "BC5_UNORM", "BC7": "BC7_UNORM", "BC6H": "BC6H_UF16"}
+def _uat(args):
+    """Run UAssetTool (texture extract/decode/inject/pack). Pass ABSOLUTE paths — it requires them for output."""
+    return subprocess.run([UAT] + args, capture_output=True, text=True, cwd=ROOT, creationflags=CNW)
 
-def _run(args):
-    return subprocess.run(args, capture_output=True, cwd=ROOT, creationflags=CNW)
+# ── persistent UAssetTool JSON worker (one long-lived process = no per-call startup) ──────────
+_uat_proc = None
+_uat_proc_lock = threading.Lock()
 
-# ── texture decode (PNG) ───────────────────────────────────────────────────────
-_BLOCK = {"DXT1": 8, "BC4": 8, "DXT5": 16, "BC5": 16, "BC7": 16, "BC6H": 16}
-_DXGI  = {"BC4": 80, "BC5": 83, "BC6H": 95, "BC7": 98}
+def _uat_json(req):
+    """Send one line-delimited JSON request to a persistent UAssetTool worker; return the parsed response.
+    Reusing one process is what keeps batch decode fast (startup paid once, parallel across all cores)."""
+    global _uat_proc
+    with _uat_proc_lock:
+        if _uat_proc is None or _uat_proc.poll() is not None:
+            _uat_proc = subprocess.Popen([UAT], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL, cwd=ROOT, creationflags=CNW,
+                                         text=True, encoding="utf-8")
+        _uat_proc.stdin.write(json.dumps(req) + "\n"); _uat_proc.stdin.flush()
+        # Texture actions also print human-readable status to stdout — drain lines until the JSON reply.
+        # (Draining also keeps the pipe from filling and deadlocking the worker mid-batch.)
+        while True:
+            line = _uat_proc.stdout.readline()
+            if line == "":
+                return {"success": False, "message": "UAssetTool worker closed unexpectedly"}
+            s = line.strip()
+            if s.startswith("{") and s.endswith("}"):
+                try:
+                    d = json.loads(s)
+                    if isinstance(d, dict) and ("success" in d or "data" in d): return d
+                except Exception: pass
 
-def _mip0(fmt, w, h):
-    if fmt == "B8G8R8A8": return w * h * 4
-    return max(1, (w + 3) // 4) * max(1, (h + 3) // 4) * _BLOCK.get(fmt, 16)
+@atexit.register
+def _uat_shutdown():
+    if _uat_proc and _uat_proc.poll() is None:
+        try: _uat_proc.terminate()
+        except Exception: pass
 
-def _dds(fmt, w, h, data):
-    flags = 0x1 | 0x2 | 0x4 | 0x1000 | 0x80000
-    base  = struct.pack("<7I", 124, flags, h, w, len(data), 0, 1) + b"\0" * 44
-    if fmt == "B8G8R8A8":
-        pf = struct.pack("<2I", 32, 0x41) + b"\0" * 4 + struct.pack("<5I", 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
-        return b"DDS " + base + pf + struct.pack("<5I", 0x1000, 0, 0, 0, 0) + data
-    if fmt in ("DXT1", "DXT5"):
-        pf = struct.pack("<2I", 32, 0x4) + fmt.encode() + b"\0" * 20
-        return b"DDS " + base + pf + struct.pack("<5I", 0x1000, 0, 0, 0, 0) + data
-    if fmt in _DXGI:
-        pf = struct.pack("<2I", 32, 0x4) + b"DX10" + b"\0" * 20
-        return b"DDS " + base + pf + struct.pack("<5I", 0x1000, 0, 0, 0, 0) + struct.pack("<5I", _DXGI[fmt], 3, 0, 1, 0) + data
-    return None
+def _decode_batch(uasset_paths):
+    """Parallel-decode many extracted .uasset textures to .png next to each (non-textures are skipped)."""
+    paths = [os.path.abspath(p) for p in uasset_paths if os.path.exists(p)]
+    if not paths: return {}
+    return _uat_json({"action": "batch_extract_texture_png", "file_paths": paths,
+                      "output_path": os.path.abspath(ASSETS), "base_path": os.path.abspath(ASSETS),
+                      "usmap_path": USMAP, "format": "png", "parallel": True})
 
+# ── texture decode (PNG) — handled by UAssetTool ───────────────────────────────
 def _decode_png(dst_base):
-    """Decode extracted UE texture files (.uasset/.uexp/.ubulk) to .png alongside them."""
-    uasset = dst_base + ".uasset"; uexp = dst_base + ".uexp"; ubulk = dst_base + ".ubulk"
-    if not os.path.exists(uexp): return
-    try:
-        ab  = open(uasset, "rb").read() if os.path.exists(uasset) else b""
-        fmt = next((f for f in ("DXT1", "DXT5", "BC7", "BC6H", "BC5", "BC4", "B8G8R8A8")
-                    if b"PF_" + f.encode() in ab), "DXT1")
-        eb   = open(uexp, "rb").read()
-        POW  = {32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}
-        cands = set()
-        for o in range(0, len(eb) - 8):
-            x, y = struct.unpack_from("<ii", eb, o)
-            if x in POW and y in POW: cands.add((x, y))
-        raw  = open(ubulk, "rb").read() if os.path.exists(ubulk) else eb
-        fits = [(w, h) for w, h in cands if _mip0(fmt, w, h) <= len(raw)]
-        if not fits: return
-        sq   = [d for d in fits if d[0] == d[1]]
-        w, h = max(sq or fits, key=lambda d: d[0] * d[1])
-        dds  = _dds(fmt, w, h, raw[:_mip0(fmt, w, h)])
-        if not dds: return
-        im   = Image.open(io.BytesIO(dds)); im.load()
-        im.convert("RGBA").save(dst_base + ".png")
-    except Exception as e:
-        print(f"  [warn] PNG decode failed for {os.path.basename(dst_base)}: {e}", file=sys.stderr)
+    """Decode one extracted UE texture (.uasset/.uexp/.ubulk) to .png via UAssetTool.
+    Accurate (object-model, true dims, all BC formats, graceful mip fallback) — no pow2 guessing."""
+    if not os.path.exists(dst_base + ".uasset"): return
+    out_png = os.path.abspath(dst_base + ".png")
+    r = _uat(["extract_texture", os.path.abspath(dst_base + ".uasset"), out_png, "--usmap", USMAP])
+    if not os.path.exists(out_png):
+        print(f"  [warn] PNG decode failed for {os.path.basename(dst_base)}: "
+              f"{((r.stderr or '') + (r.stdout or '')).strip()[-200:]}", file=sys.stderr)
 
 # ── pak index (cached) ────────────────────────────────────────────────────────
 _INDEX      = None
@@ -196,19 +197,19 @@ def _filter_subpath(entries, skin_id, subpath):
     return [(p, c) for p, c in entries if _match(p)]
 
 # ── prereq check ──────────────────────────────────────────────────────────────
-def _check_prereqs(need_retoc=True):
+def _check_prereqs(need_tool=True):
     issues = []
     if not glob.glob(PAKS + "/pakchunk*.utoc"):
         issues.append(f"No pak files found at: {PAKS}")
-    if need_retoc and not os.path.exists(RETOC):
-        issues.append(f"retoc not found at: {RETOC}")
+    if need_tool and not os.path.exists(UAT):
+        issues.append(f"UAssetTool not found at: {UAT}")
     if issues:
         for i in issues: print(f"[error] {i}", file=sys.stderr)
         sys.exit(1)
 
 # ── list ───────────────────────────────────────────────────────────────────────
 def cmd_list(arg):
-    _check_prereqs(need_retoc=False)
+    _check_prereqs(need_tool=False)
     arg     = arg.replace("\\", "/")
     skin_id, _, subpath = arg.partition("/")
     entries = _skin_entries(skin_id)
@@ -237,41 +238,22 @@ def cmd_import(arg):
     if not entries:
         print(f"No entries matched {arg!r}"); return
 
-    char_id    = _char_id(skin_id)
-    dest_root  = os.path.abspath(os.path.join(ASSETS, "Marvel", "Content", "Marvel", "Characters", char_id, skin_id))
+    char_id   = _char_id(skin_id)
+    dest_root = os.path.abspath(os.path.join(ASSETS, "Marvel", "Content", "Marvel", "Characters", char_id, skin_id))
     print(f"  Destination: {dest_root}")
 
-    by_cont = {}
-    for p, c in entries: by_cont.setdefault(c, []).append(p)
+    # UAssetTool extracts straight to legacy under assets/ (full game path preserved), then batch-decodes to PNG.
+    # Names carry the skin id, so basename filters are unique; cross-container matches resolve to the patched version.
+    names = sorted({os.path.basename(p)[:-7] for p, _ in entries})
+    print(f"  Extracting {len(names)} asset(s) from game via UAssetTool...", file=sys.stderr)
+    r = _uat(["extract_iostore_legacy", PAKS, os.path.abspath(ASSETS), "--filter"] + names)
+    if "Extraction complete" not in (r.stdout or ""):
+        print(f"  [warn] extract: {((r.stderr or '') + (r.stdout or '')).strip()[-300:]}", file=sys.stderr)
+    _decode_batch(glob.glob(os.path.join(dest_root, "**", "*.uasset"), recursive=True))   # parallel -> PNG next to each
 
-    total = 0
-    for cont, paths in sorted(by_cont.items()):
-        print(f"  Extracting {len(paths)} texture(s) from {cont}...", file=sys.stderr)
-        tmp = os.path.join(_WORK, "cli_import_tmp")
-        shutil.rmtree(tmp, ignore_errors=True); os.makedirs(tmp)
-        try:
-            flt = []
-            for p in paths: flt += ["--filter", p]
-            r = _run([RETOC, "unpack", f"{PAKS}/{cont}"] + flt + ["-o", tmp])
-            if r.returncode != 0:
-                msg = r.stderr.decode(errors="replace")[:400]
-                print(f"  [warn] retoc exit {r.returncode}: {msg}", file=sys.stderr)
-            for pak_path in paths:
-                game_rel = _pak_rel(pak_path)              # Marvel/Content/.../T_foo
-                src_base = os.path.join(tmp, *game_rel.split("/"))
-                dst_base = os.path.join(ASSETS, *game_rel.split("/"))
-                os.makedirs(os.path.dirname(dst_base), exist_ok=True)
-                copied_this = 0
-                for ext in (".uasset", ".uexp", ".ubulk"):
-                    src = src_base + ext
-                    if os.path.exists(src):
-                        shutil.copy2(src, dst_base + ext); total += 1; copied_this += 1
-                if copied_this:
-                    _decode_png(dst_base)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    print(f"Extracted {total} file(s) -> {dest_root}")
+    n_assets = len(glob.glob(os.path.join(dest_root, "**", "*.uasset"), recursive=True))
+    n_png    = len(glob.glob(os.path.join(dest_root, "**", "*.png"), recursive=True))
+    print(f"Extracted {n_assets} asset(s), decoded {n_png} PNG -> {dest_root}")
 
 # ── export ─────────────────────────────────────────────────────────────────────
 def _game_rel_for_skin(skin_id, tex_rel):
@@ -342,173 +324,121 @@ def _expand_export_args(args):
         if item[0] not in seen: seen.add(item[0]); out.append(item)
     return out
 
-# ── template-based staging (proven pak build path) ────────────────────────────
-_TPL_REG   = None
-_tpl_cache = {}
-
-def _templates():
-    global _TPL_REG
-    if _TPL_REG is not None: return _TPL_REG
-    _TPL_REG = {}
-    rf = os.path.join(TPL_DIR, "registry.json")
-    if os.path.exists(rf):
-        for k, v in json.load(open(rf)).items():
-            f, w, h = k.split("|"); _TPL_REG[(f, int(w), int(h))] = v
-    return _TPL_REG
-
-def _tpl_for(fmt, w, h):
-    return _templates().get(("PF_" + fmt, w, h))
-
-def _load_template(fn):
-    if fn not in _tpl_cache:
-        _tpl_cache[fn] = (open(os.path.join(TPL_DIR, fn + ".uasset"), "rb").read(),
-                          open(os.path.join(TPL_DIR, fn + ".uexp"),   "rb").read())
-    return _tpl_cache[fn]
-
-def _sum(a):
-    """Parse versioned UE package summary -> {field: (file_pos, value)} for all offsets that shift on rename."""
-    p = [28]; F = {}
-    def ri(nm=None):
-        v = struct.unpack_from("<i", a, p[0])[0]; o = p[0]; p[0] += 4
-        if nm: F[nm] = (o, v)
-        return v
-    def rq(nm=None):
-        v = struct.unpack_from("<q", a, p[0])[0]; o = p[0]; p[0] += 8
-        if nm: F[nm] = (o, v)
-        return v
-    def rs():
-        n = ri(); p[0] += n if n > 0 else (-n * 2 if n < 0 else 0)
-    ri("ths"); rs(); flags = ri(); feo = (flags & 0x80000000) != 0
-    ri(); ri("names"); ri(); ri("soft")
-    if not feo: rs()
-    ri(); ri("gather"); ri(); ri("exports"); ri(); ri("imports"); ri("depends")
-    ri(); ri("softpkg"); ri("search"); ri("thumb"); p[0] += 16
-    if not feo: p[0] += 16
-    gen = ri(); p[0] += gen * 8
-    for _ in range(2): p[0] += 6; ri(); rs()
-    ri(); ri(); ri(); ri(); ri("assetreg"); rq("bdso"); ri("worldtile")
-    nck = ri(); p[0] += nck * 4; ri(); ri("preload"); ri(); rq("ptoc"); ri("dro")
-    return F
-
-def _rename(a, old_pkg, new_pkg, old_obj, new_obj):
-    """Rename a versioned texture package: shift name-map entries and every dependent offset."""
-    a = bytearray(a); old_ths = struct.unpack_from("<i", a, 28)[0]
-    sl = struct.unpack_from("<i", a, 32)[0]
-    a[32:32 + 4 + sl] = struct.pack("<i", len(new_pkg) + 1) + new_pkg.encode() + b"\x00"
-    ds = len(new_pkg) - len(old_pkg)
-    def repl(old, new):
-        oe = struct.pack("<i", len(old) + 1) + old.encode() + b"\x00"
-        ne = struct.pack("<i", len(new) + 1) + new.encode() + b"\x00"
-        i = a.find(oe)
-        if i < 0: raise RuntimeError("name not found in map: " + old)
-        a[i:i + len(oe)] = ne; return len(ne) - len(oe)
-    dn = repl(old_pkg, new_pkg)
-    do = repl(old_obj, new_obj)
-    total = ds + dn + do
-    F = _sum(a)
-    o, v = F["names"]; struct.pack_into("<i", a, o, v + ds)
-    for k in ("soft", "gather", "exports", "imports", "depends", "softpkg", "assetreg", "worldtile", "preload", "dro"):
-        o, v = F[k]
-        if v > 0: struct.pack_into("<i", a, o, v + total)
-    o, v = F["ths"]; struct.pack_into("<i", a, o, v + total)
-    o, v = F["bdso"]; struct.pack_into("<q", a, o, v + total)
-    ex = F["exports"][1] + total
-    for q in range(ex, min(ex + 300, len(a) - 8)):
-        if struct.unpack_from("<q", a, q)[0] == old_ths and 0 < struct.unpack_from("<q", a, q - 8)[0] < 20000000:
-            struct.pack_into("<q", a, q, old_ths + total); break
-    return bytes(a)
-
-def _texconv_mip0(image_bytes, fmt, w, h):
-    """Encode via texconv -> raw top-mip blocks. Returns None if texconv absent or fails."""
-    f = _TCFMT.get(fmt)
-    if not f or not os.path.exists(TEXCONV): return None
-    tin  = os.path.abspath(os.path.join(_WORK, "_tc_in.png"))
-    tout = os.path.abspath(os.path.join(_WORK, "_tc_out"))
-    Image.open(io.BytesIO(image_bytes)).convert("RGBA").save(tin)
-    shutil.rmtree(tout, ignore_errors=True); os.makedirs(tout)
-    _run([TEXCONV, "-nologo", "-f", f, "-m", "1", "-w", str(w), "-h", str(h), "-o", tout, "-y", tin])
-    dds = glob.glob(tout + "/*.dds")
-    if not dds: return None
-    d = open(dds[0], "rb").read(); off = 148 if d[84:88] == b"DX10" else 128
-    return d[off:]
-
-def encode_mip0(image_bytes, fmt, w, h):
-    m = _texconv_mip0(image_bytes, fmt, w, h)
-    if m is not None: return m
-    pf = {"DXT1": "DXT1", "DXT5": "DXT5"}.get(fmt)
-    if not pf: raise RuntimeError(f"{fmt} encode needs texconv.exe in Tools/ (Pillow only does DXT1/DXT5)")
-    im = Image.open(io.BytesIO(image_bytes)).convert("RGBA").resize((w, h), Image.LANCZOS)
-    b = io.BytesIO(); im.save(b, "DDS", pixel_format=pf)
-    return b.getvalue()[128:]
-
-def _tex_meta(game_rel):
-    """Read format + top-mip dimensions from local .uasset/.uexp/.ubulk in assets/."""
-    base  = os.path.join(ASSETS, *game_rel.split("/"))
-    uasset = base + ".uasset"; uexp = base + ".uexp"; ubulk = base + ".ubulk"
-    if not os.path.exists(uexp): raise RuntimeError("no .uexp found — run 'import' first")
-    ab  = open(uasset, "rb").read() if os.path.exists(uasset) else b""
-    fmt = next((f for f in ("DXT1", "DXT5", "BC7", "BC6H", "BC5", "BC4", "B8G8R8A8")
-                if b"PF_" + f.encode() in ab), "DXT1")
-    eb  = open(uexp, "rb").read()
-    POW = {32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}
-    cands = set()
-    for o in range(0, len(eb) - 8):
-        x, y = struct.unpack_from("<ii", eb, o)
-        if x in POW and y in POW: cands.add((x, y))
-    raw  = open(ubulk, "rb").read() if os.path.exists(ubulk) else eb
-    fits = [(w, h) for w, h in cands if _mip0(fmt, w, h) <= len(raw)]
-    if not fits: raise RuntimeError("could not determine texture dimensions")
-    sq = [d for d in fits if d[0] == d[1]]
-    w, h = max(sq or fits, key=lambda d: d[0] * d[1])
-    return fmt, w, h
-
-def _stage_from_local(stage, game_rel):
-    """Stage one texture for export using the proven template approach:
-    rename a cooked template to the target package path, encode the PNG into its mip0 slot."""
-    base     = os.path.join(ASSETS, *game_rel.split("/"))
-    png_path = base + ".png"
-
-    # Auto-decode PNG if import was run but PNG is missing (e.g. decode failed originally)
-    if not os.path.exists(png_path):
-        if not os.path.exists(base + ".uexp"):
-            raise RuntimeError("no assets found — run 'import' first")
+# ── export staging: inject edited PNG into the vanilla .uasset via UAssetTool ──────────────────
+def _stage_inject(stage, game_rel):
+    """Stage one texture for export: inject the edited PNG into the imported (vanilla) .uasset via
+    UAssetTool. Pixel format is preserved from the base texture — no templates, no binary patching."""
+    base = os.path.join(ASSETS, *game_rel.split("/"))
+    png  = base + ".png"
+    if not os.path.exists(base + ".uasset"):
+        raise RuntimeError("no base asset — run 'import' first")
+    if not os.path.exists(png):
         _decode_png(base)
-        if not os.path.exists(png_path):
-            raise RuntimeError("PNG decode failed; check format support")
+        if not os.path.exists(png):
+            raise RuntimeError("PNG missing and decode failed — re-import this texture")
+    out_ua = os.path.join(stage, *game_rel.split("/")) + ".uasset"
+    os.makedirs(os.path.dirname(out_ua), exist_ok=True)
+    r = _uat(["inject_texture", os.path.abspath(base + ".uasset"), os.path.abspath(png),
+              os.path.abspath(out_ua), "--usmap", USMAP])
+    if not os.path.exists(out_ua):
+        raise RuntimeError("inject failed: " + (((r.stderr or "") + (r.stdout or "")).strip()[-200:] or "unknown"))
+    return os.path.basename(game_rel)
 
-    fmt, w, h = _tex_meta(game_rel)
+# ── material (MI) parameter editing via UAssetTool to_json / from_json ─────────────────────────
+def is_material(path_or_name):
+    return os.path.basename(path_or_name).upper().startswith("MI_")
 
-    tpl = _tpl_for(fmt, w, h)
-    if not tpl:
-        raise RuntimeError(
-            f"no template for {fmt} {w}x{h} — add one to templates/ "
-            f"(cook one {fmt} {w}x{h} texture in UE and add its registry entry)")
+def _f(x):
+    try: return float(x)
+    except (TypeError, ValueError): return 0.0
+def _gn(lst, n):
+    for p in lst or []:
+        if isinstance(p, dict) and p.get("Name") == n: return p
+    return None
+def _ex_props(e): return e.get("Data") or e.get("Value") or []
+def _mat_pname(entry):
+    pinfo = _gn(entry["Value"], "ParameterInfo")
+    return (_gn(pinfo["Value"], "Name") or {}).get("Value") if pinfo else None
+def _mat_color(entry):
+    pv = _gn(entry["Value"], "ParameterValue"); v = pv.get("Value") if pv else None
+    if isinstance(v, list) and v and isinstance(v[0], dict) and isinstance(v[0].get("Value"), dict) and "R" in v[0]["Value"]:
+        return v[0]["Value"]
+    return None
+def _mat_params(d):
+    ex = d["Exports"][0]
+    vp = _gn(_ex_props(ex), "VectorParameterValues"); sp = _gn(_ex_props(ex), "ScalarParameterValues")
+    colors, scalars = [], []
+    for e in (vp or {}).get("Value", []):
+        nm = _mat_pname(e); lc = _mat_color(e)
+        if nm and lc: colors.append({"name": nm, "rgba": [round(_f(lc[k]), 5) for k in "RGBA"]})
+    for e in (sp or {}).get("Value", []):
+        nm = _mat_pname(e); pv = _gn(e["Value"], "ParameterValue")
+        if nm and pv is not None and not isinstance(pv.get("Value"), (list, dict)):
+            scalars.append({"name": nm, "value": round(_f(pv.get("Value")), 5)})
+    return colors, scalars
+def _apply_mat_edits(d, colors, scalars):
+    ex = d["Exports"][0]
+    vp = _gn(_ex_props(ex), "VectorParameterValues"); sp = _gn(_ex_props(ex), "ScalarParameterValues")
+    for e in (vp or {}).get("Value", []):
+        nm = _mat_pname(e)
+        if nm in colors:
+            lc = _mat_color(e)
+            if lc: r, g, b, a = colors[nm]; lc["R"], lc["G"], lc["B"], lc["A"] = float(r), float(g), float(b), float(a)
+    for e in (sp or {}).get("Value", []):
+        nm = _mat_pname(e)
+        if nm in scalars:
+            pv = _gn(e["Value"], "ParameterValue")
+            if pv is not None: pv["Value"] = float(scalars[nm])
 
-    png_bytes = open(png_path, "rb").read()
-    sz        = _mip0(fmt, w, h)
-    mip0_data = encode_mip0(png_bytes, fmt, w, h)
-    if len(mip0_data) != sz:
-        raise RuntimeError(f"encoded mip0 {len(mip0_data)} bytes != expected {sz}")
+def _mat_json(game_rel):
+    """Extract the MI + convert to JSON (cached at assets/<game_rel>.json). Returns the json path."""
+    base = os.path.join(ASSETS, *game_rel.split("/"))
+    jp = base + ".json"
+    if os.path.exists(jp): return jp
+    if not os.path.exists(base + ".uasset"):
+        _uat(["extract_iostore_legacy", PAKS, os.path.abspath(ASSETS), "--filter", os.path.basename(game_rel)])
+    if not os.path.exists(base + ".uasset"):
+        raise RuntimeError("material not found in game paks")
+    _uat(["to_json", os.path.abspath(base + ".uasset"), USMAP, os.path.abspath(os.path.dirname(base))])
+    if not os.path.exists(jp): raise RuntimeError("to_json produced no JSON")
+    return jp
+def read_material(game_rel):
+    """{colors:[{name,rgba}], scalars:[{name,value}]} for an MI material instance."""
+    colors, scalars = _mat_params(json.load(open(_mat_json(game_rel), encoding="utf-8-sig")))
+    return {"colors": colors, "scalars": scalars}
+def _stage_material(stage, game_rel, colors, scalars):
+    """Apply color/scalar edits to the MI and from_json it into the export stage (byte-faithful)."""
+    d = json.load(open(_mat_json(game_rel), encoding="utf-8-sig"))
+    _apply_mat_edits(d, colors or {}, scalars or {})
+    ej = os.path.join(_WORK, "_mat_edit.json"); json.dump(d, open(ej, "w"))
+    out_ua = os.path.join(stage, *game_rel.split("/")) + ".uasset"
+    os.makedirs(os.path.dirname(out_ua), exist_ok=True)
+    _uat(["from_json", os.path.abspath(ej), os.path.abspath(out_ua), USMAP])
+    if not os.path.exists(out_ua): raise RuntimeError("from_json produced no uasset")
+    return os.path.basename(game_rel)
 
-    tua, tue_bytes = _load_template(tpl["file"])
-    new_pkg = "/Game/" + game_rel.split("Marvel/Content/", 1)[-1]
-    new_obj = os.path.basename(game_rel)
-
-    ue = bytearray(tue_bytes)
-    pf_off = next((ue.find(b"PF_" + f.encode()) for f in
-                   ("DXT1", "DXT5", "BC5", "BC7", "BC4", "BC6H", "B8G8R8A8")
-                   if ue.find(b"PF_" + f.encode()) >= 0), -1)
-    if pf_off < 0: raise RuntimeError("PF_ tag not found in template .uexp")
-    L      = struct.unpack_from("<i", ue, pf_off - 4)[0]
-    payoff = pf_off + L + 12
-    ue[payoff:payoff + sz] = mip0_data
-
-    nua = _rename(tua, tpl["pkg"], new_pkg, tpl["obj"], new_obj)
-    dst = os.path.join(stage, *game_rel.split("/"))
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
-    open(dst + ".uasset", "wb").write(nua)
-    open(dst + ".uexp",   "wb").write(bytes(ue))
-    return f"{new_obj} ({fmt} {w}x{h})"
+def build_mod(mod_name, tex_items, mat_items, out_dir, force=True):
+    """Pack TEXTURE edits (inject) + MATERIAL param edits (from_json) into ONE mod.
+    tex_items: [game_rel]; mat_items: [{game_rel, colors:{name:[r,g,b,a]}, scalars:{name:val}}]."""
+    out_dir = os.path.abspath(out_dir); stem = f"{mod_name}_9999999_P"; base = os.path.join(out_dir, stem)
+    for ext in (".pak", ".ucas", ".utoc"):
+        if os.path.exists(base + ext): os.remove(base + ext)
+    stage = os.path.join(_WORK, "build_stage", mod_name)
+    shutil.rmtree(os.path.join(_WORK, "build_stage"), ignore_errors=True); os.makedirs(stage)
+    applied, skipped = [], []
+    for game_rel in tex_items:
+        try: applied.append("tex " + _stage_inject(stage, game_rel))
+        except Exception as e: skipped.append(f"{os.path.basename(game_rel)}: {e}")
+    for m in mat_items:
+        try: applied.append("mat " + _stage_material(stage, m["game_rel"], m.get("colors", {}), m.get("scalars", {})))
+        except Exception as e: skipped.append(f"{os.path.basename(m.get('game_rel',''))}: {e}")
+    if not applied:
+        return {"ok": False, "error": "nothing staged: " + "; ".join(skipped)}
+    os.makedirs(out_dir, exist_ok=True)
+    _uat(["create_mod_iostore", os.path.abspath(base), os.path.abspath(stage), "--usmap", USMAP])
+    if not os.path.exists(base + ".utoc"):
+        return {"ok": False, "error": "create_mod_iostore failed"}
+    return {"ok": True, "applied": applied, "skipped": skipped, "pak": base + ".pak"}
 
 def cmd_export(mod_name, tex_args, out_dir, force):
     _check_prereqs()
@@ -537,7 +467,7 @@ def cmd_export(mod_name, tex_args, out_dir, force):
         staged = 0; skipped = []
         for game_rel, label in pairs:
             try:
-                desc = _stage_from_local(stage, game_rel)
+                desc = _stage_inject(stage, game_rel)
                 staged += 1
                 print(f"  staged {label} -> {desc}")
             except Exception as e:
@@ -548,12 +478,11 @@ def cmd_export(mod_name, tex_args, out_dir, force):
             print("Nothing staged — check warnings above"); return
 
         os.makedirs(out_dir, exist_ok=True)
-        r = _run([RETOC, "pack", stage, "-o", out_dir])
-        if r.returncode != 0:
-            print(f"retoc pack failed (exit {r.returncode}):\n"
-                  f"{r.stderr.decode(errors='replace')[:500]}"); return
-
         base = os.path.join(out_dir, stem)
+        r = _uat(["create_mod_iostore", os.path.abspath(base), os.path.abspath(stage), "--usmap", USMAP])
+        if not os.path.exists(base + ".utoc"):
+            print(f"create_mod_iostore failed:\n{((r.stderr or '') + (r.stdout or '')).strip()[:500]}"); return
+
         if os.path.exists(base + ".utoc"):
             print(f"Packed {staged} texture(s) -> {os.path.abspath(base)}.{{pak,ucas,utoc}}")
         else:

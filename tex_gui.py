@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """tex_gui.py - Bottle.py web GUI for tex_cli.py  (python tex_gui.py to run)."""
 import os, sys, re, json, glob, threading, time, queue, shutil, hashlib, struct, io, base64, webbrowser
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
 sys.path.insert(0, ROOT)
+
+# robust console: a frozen exe's stdout is cp1252 and crashes on non-ASCII (— … →) — make it UTF-8/replace
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception: pass
 
 import tex_cli
 from bottle import Bottle, request, response, static_file, ServerAdapter
@@ -22,7 +28,7 @@ class _ThreadedServer(ServerAdapter):
                           handler_class=WSGIRequestHandler)
         srv.serve_forever()
 
-GUI_DIR  = os.path.join(ROOT, "gui")
+GUI_DIR  = os.path.join(getattr(sys, "_MEIPASS", ROOT), "gui")   # bundled gui/ when frozen, else local
 PORT     = 8767
 app      = Bottle()
 
@@ -200,61 +206,37 @@ def _push_sse(data: dict):
         for q in dead: _sse_queues.remove(q)
 
 def _run_import_job(items):
-    """items: [{skin_id, rel_path, game_rel}]"""
+    """items: [{skin_id, rel_path, game_rel, name}] — extract+decode all via UAssetTool (one extract call,
+    then a parallel batch decode through the persistent worker)."""
     with _job_lock:
         _job.update(running=True, current=0, total=len(items), name="", done=False, error=None, results=[])
+    try:
+        names = sorted({os.path.basename(it["game_rel"]) for it in items})
+        _push_sse({"current": 0, "total": len(items), "name": "Extracting from game…", "done": False})
+        tex_cli._uat(["extract_iostore_legacy", tex_cli.PAKS, os.path.abspath(tex_cli.ASSETS), "--filter"] + names)
 
-    # Group by container to minimise retoc calls
-    # For each item, find its pak entries grouped by container
-    by_cont = {}   # cont -> [(pak_path, game_rel, name)]
-    for item in items:
-        skin_id = item["skin_id"]
-        rel     = item["rel_path"]
-        needle  = tex_cli._skin_needle(skin_id)
-        for pak_path, cont in tex_cli._skin_entries(skin_id):
-            sr = tex_cli._skin_rel(pak_path, skin_id)
-            if sr.lower() == rel.lower():
-                by_cont.setdefault(cont, []).append((pak_path, item["game_rel"], item["name"]))
-                break
+        _push_sse({"current": 0, "total": len(items), "name": "Decoding…", "done": False})
+        uassets = [os.path.join(tex_cli.ASSETS, *it["game_rel"].split("/")) + ".uasset" for it in items]
+        tex_cli._decode_batch([u for u in uassets if os.path.exists(u)])
 
-    current = 0
-    results = []
-
-    for cont, pak_items in by_cont.items():
-        pak_paths = [p for p, _, _ in pak_items]
-        tmp = os.path.join(tex_cli._WORK, "_gui_import_tmp")
-        shutil.rmtree(tmp, ignore_errors=True)
-        os.makedirs(tmp, exist_ok=True)
-        try:
-            flt = []
-            for p in pak_paths: flt += ["--filter", p]
-            tex_cli._run([tex_cli.RETOC, "unpack", f"{tex_cli.PAKS}/{cont}"] + flt + ["-o", tmp])
-
-            for pak_path, game_rel, name in pak_items:
-                src_base = os.path.join(tmp, *tex_cli._pak_rel(pak_path).split("/"))
-                dst_base = os.path.join(tex_cli.ASSETS, *game_rel.split("/"))
-                os.makedirs(os.path.dirname(dst_base), exist_ok=True)
-                copied = 0
-                for ext in (".uasset", ".uexp", ".ubulk"):
-                    src = src_base + ext
-                    if os.path.exists(src):
-                        shutil.copy2(src, dst_base + ext); copied += 1
-                if copied:
-                    tex_cli._decode_png(dst_base)
-
-                current += 1
-                token = _token(game_rel) if os.path.exists(dst_base + ".png") else None
-                if token:
-                    results.append({"name": name, "token": token, "game_rel": game_rel})
-                with _job_lock:
-                    _job.update(current=current, name=name)
-                _push_sse({"current": current, "total": _job["total"], "name": name, "done": False})
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        results = []; current = 0
+        for it in items:
+            dst_base = os.path.join(tex_cli.ASSETS, *it["game_rel"].split("/"))
+            current += 1
+            if os.path.exists(dst_base + ".png"):
+                results.append({"name": it["name"], "token": _token(it["game_rel"]), "game_rel": it["game_rel"]})
+            with _job_lock:
+                _job.update(current=current, name=it["name"])
+            _push_sse({"current": current, "total": len(items), "name": it["name"], "done": False})
+    except Exception as e:
+        with _job_lock:
+            _job.update(running=False, done=True, error=str(e))
+        _push_sse({"done": True, "error": str(e), "results": []})
+        return
 
     with _job_lock:
         _job.update(running=False, done=True, results=results)
-    _push_sse({"current": current, "total": _job["total"], "name": "", "done": True, "results": results})
+    _push_sse({"current": current, "total": len(items), "name": "", "done": True, "results": results})
 
 # ─── file change watcher ──────────────────────────────────────────────────────
 
@@ -373,36 +355,12 @@ def api_import_one():
         response.content_type = "application/json"
         return json.dumps({"ok": False, "error": "missing skin_id or rel_path"})
     try:
-        # Find pak entries for this specific file
-        entries = tex_cli._skin_entries(skin_id)
-        matched = [(p, c) for p, c in entries if tex_cli._skin_rel(p, skin_id).lower() == rel.lower()]
-        if not matched:
-            response.content_type = "application/json"
-            return json.dumps({"ok": False, "error": "not found in pak index"})
-
         game_rel = tex_cli._game_rel_for_skin(skin_id, rel)
         dst_base = os.path.join(tex_cli.ASSETS, *game_rel.split("/"))
         os.makedirs(os.path.dirname(dst_base), exist_ok=True)
-
-        by_cont = {}
-        for p, c in matched: by_cont.setdefault(c, []).append(p)
-
-        for cont, paths in by_cont.items():
-            tmp = os.path.join(tex_cli._WORK, "_gui_single_tmp")
-            shutil.rmtree(tmp, ignore_errors=True); os.makedirs(tmp, exist_ok=True)
-            try:
-                flt = []
-                for p in paths: flt += ["--filter", p]
-                tex_cli._run([tex_cli.RETOC, "unpack", f"{tex_cli.PAKS}/{cont}"] + flt + ["-o", tmp])
-                for p in paths:
-                    src_base = os.path.join(tmp, *tex_cli._pak_rel(p).split("/"))
-                    for ext in (".uasset", ".uexp", ".ubulk"):
-                        if os.path.exists(src_base + ext):
-                            shutil.copy2(src_base + ext, dst_base + ext)
-            finally:
-                shutil.rmtree(tmp, ignore_errors=True)
-
-        tex_cli._decode_png(dst_base)
+        tex_cli._uat(["extract_iostore_legacy", tex_cli.PAKS, os.path.abspath(tex_cli.ASSETS),
+                      "--filter", os.path.basename(game_rel)])
+        tex_cli._decode_batch([dst_base + ".uasset"])
         png_exists = os.path.exists(dst_base + ".png")
         response.content_type = "application/json"
         return json.dumps({
@@ -547,7 +505,7 @@ def api_delete_all_imported():
 # ── main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"Atelier Texture GUI → http://localhost:{PORT}")
+    print(f"Atelier Texture GUI -> http://localhost:{PORT}")
     threading.Timer(0.8, lambda: webbrowser.open(f"http://localhost:{PORT}")).start()
     try:
         app.run(host="127.0.0.1", port=PORT, quiet=True, server=_ThreadedServer)

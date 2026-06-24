@@ -584,6 +584,8 @@ let   sidebarData = {};      // token -> {name, game_rel, skin_id, char_name, sk
 let   importing   = false;
 let   pendingImport = null;  // {skin_id, rel_path, game_rel, name, card_el}
 let   pendingClear  = null;  // sidebar item to delete
+let   pendingImportAll = null;       // captured texture set for "Import All" (respects search filter)
+let   suppressChangeToastUntil = 0;  // swallow watcher "updated on disk" toasts during our own imports
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
@@ -618,6 +620,7 @@ function pushNav(newNav) {
   document.getElementById("search-input").value = "";
   renderGrid();
   renderBreadcrumbs();
+  renderSidebar();   // un-filter the staging list now that search is cleared
 }
 
 function updateNavBtns() {
@@ -633,6 +636,7 @@ document.getElementById("btn-back").addEventListener("click", () => {
   updateNavBtns();
   renderGrid();
   renderBreadcrumbs();
+  renderSidebar();
 });
 document.getElementById("btn-forward").addEventListener("click", () => {
   if (histIdx >= history.length - 1) return;
@@ -642,6 +646,7 @@ document.getElementById("btn-forward").addEventListener("click", () => {
   updateNavBtns();
   renderGrid();
   renderBreadcrumbs();
+  renderSidebar();
 });
 
 // ── breadcrumbs ───────────────────────────────────────────────────────────────
@@ -862,6 +867,8 @@ document.getElementById("search-input").addEventListener("input", () => {
           onClick: () => handleTextureClick(item) }
     ));
   }
+  // search also narrows the Export Staging sidebar
+  renderSidebar();
 });
 
 // ── texture click / single import ─────────────────────────────────────────────
@@ -885,6 +892,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
   document.getElementById("confirm-overlay").classList.remove("active");
   if (!pendingImport) return;
   const item = pendingImport; pendingImport = null;
+  suppressChangeToastUntil = Date.now() + 2500;   // swallow the watcher toast for our own import
   setStatus(`Importing ${item.name}…`);
   try {
     const res = await api("/api/import", {
@@ -909,15 +917,24 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
 });
 
 // ── import all ────────────────────────────────────────────────────────────────
+function _shownTextures() {
+  // textures in the current folder, narrowed by the active search filter (matches the grid)
+  const q = document.getElementById("search-input").value.trim().toLowerCase();
+  return allItems.filter(i => i.type === "texture" && (!q || (i.name || i.label || "").toLowerCase().includes(q)));
+}
+
 document.getElementById("import-all-btn").addEventListener("click", () => {
   if (nav.level < 2) return;
-  // Import all textures from current path (ignore search filter)
-  const textures = allItems.filter(i => i.type === "texture" && !i.imported);
-  const total    = allItems.filter(i => i.type === "texture").length;
-  if (!textures.length) { toast("All textures already imported", "success"); return; }
+  // Import All only covers the textures currently SHOWN (respects the search filter)
+  const shown   = _shownTextures();
+  const pending = shown.filter(i => !i.imported);
+  const q       = document.getElementById("search-input").value.trim();
+  if (!pending.length) { toast(q ? "All shown textures already imported" : "All textures already imported", "success"); return; }
+  pendingImportAll = pending;   // capture now so a later search change can't alter the set
   document.getElementById("confirm-all-msg").textContent =
-    `Extract and decode ${textures.length} texture${textures.length !== 1 ? "s" : ""}`
-    + (textures.length < total ? ` (${total - textures.length} already imported)` : "")
+    `Extract and decode ${pending.length} texture${pending.length !== 1 ? "s" : ""}`
+    + (pending.length < shown.length ? ` (${shown.length - pending.length} already imported)` : "")
+    + (q ? ` matching "${q}"` : "")
     + ` from "${nav.skin_id}"?`;
   document.getElementById("confirm-all-overlay").classList.add("active");
 });
@@ -928,7 +945,8 @@ document.getElementById("confirm-all-cancel").addEventListener("click", () => {
 
 document.getElementById("confirm-all-ok").addEventListener("click", async () => {
   document.getElementById("confirm-all-overlay").classList.remove("active");
-  const textures = allItems.filter(i => i.type === "texture" && !i.imported);
+  const textures = pendingImportAll || [];
+  pendingImportAll = null;
   if (!textures.length) return;
 
   const items = textures.map(t => ({
@@ -992,7 +1010,10 @@ function handleSSE(d) {
     document.querySelectorAll(`#sidebar-list .sb-item[data-token="${d.token}"] .sb-thumb img`).forEach(img => {
       img.src = `/api/preview${bust}`;
     });
-    toast("Texture updated on disk — preview refreshed", "warning", 4000);
+    // Only toast for EXTERNAL edits — stay silent during our own (batch/single) imports
+    if (!importing && Date.now() >= suppressChangeToastUntil) {
+      toast("Texture updated on disk — preview refreshed", "warning", 4000);
+    }
     return;
   }
   if (!d.done && importing) {
@@ -1001,6 +1022,7 @@ function handleSSE(d) {
   }
   if (d.done && importing) {
     importing = false;
+    suppressChangeToastUntil = Date.now() + 2500;   // swallow trailing watcher events after the batch
     document.getElementById("prog-overlay").classList.remove("active");
     toast(`Imported ${d.current} texture${d.current !== 1 ? "s" : ""}`, "success");
     setStatus("");
@@ -1043,9 +1065,20 @@ function refreshSidebarEntry(game_rel, name, skin_id) {
 function renderSidebar() {
   const list = document.getElementById("sidebar-list");
   list.innerHTML = "";
-  const items = Object.values(sidebarData);
-  if (!items.length) {
+  const all = Object.values(sidebarData);
+  if (!all.length) {
     list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No textures imported yet.</div>';
+    updateExportBtn();
+    return;
+  }
+  // filter the displayed list by the active search query (selection/export still use the full set)
+  const q = document.getElementById("search-input").value.trim().toLowerCase();
+  const items = q ? all.filter(i =>
+        (i.name || "").toLowerCase().includes(q) ||
+        (i.skin_name || "").toLowerCase().includes(q) ||
+        (i.char_name || "").toLowerCase().includes(q)) : all;
+  if (!items.length) {
+    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No staged textures match the search.</div>';
     updateExportBtn();
     return;
   }

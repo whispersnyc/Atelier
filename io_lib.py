@@ -2,26 +2,9 @@ import struct, ctypes, os
 
 _TOOLS = os.environ.get("MR_TOOLS") or os.path.join(os.path.dirname(__file__), "Tools")
 if os.path.exists(AES_PATH := os.path.join(_TOOLS, "AES_KEY.txt")):
-    with open(AES_PATH) as AES_FILE: AES_KEY = bytes.fromhex(AES_FILE.read())
-OODLE = os.path.join(_TOOLS, "retoc-rivals-cli", "oo2core_9_win64.dll")
-_oo = ctypes.WinDLL(os.path.abspath(OODLE))
-_oo.OodleLZ_Decompress.restype = ctypes.c_int64
-_oo.OodleLZ_Compress.restype = ctypes.c_int64
-
-def oodle_decompress(comp, raw_len):
-    out = ctypes.create_string_buffer(raw_len)
-    n = _oo.OodleLZ_Decompress(comp, ctypes.c_int64(len(comp)), out, ctypes.c_int64(raw_len),
-                               1, 0, 0, None, 0, None, None, None, 0, 0)
-    if n != raw_len: raise RuntimeError(f"oodle decompress {n} != {raw_len}")
-    return out.raw
-
-def oodle_compress(raw, compressor=8, level=4):  # 8=Kraken, level Normal
-    bound = len(raw) + 274 * ((len(raw) + 0x3FFFF) // 0x40000) + 64
-    out = ctypes.create_string_buffer(bound)
-    n = _oo.OodleLZ_Compress(compressor, raw, ctypes.c_int64(len(raw)), out, level,
-                             None, None, None, None, 0)
-    if n <= 0: raise RuntimeError("oodle compress failed")
-    return out.raw[:n]
+    with open(AES_PATH) as AES_FILE: AES_KEY = bytes.fromhex(AES_FILE.read().strip())
+# Oodle (oodle_*/read_chunk) removed: the app extracts/decodes via UAssetTool, not in-process
+# chunk reads. io_lib now only builds the pak path index (parse_toc + parse_dir_index, AES-decrypted).
 
 # --- AES-256-ECB via Windows CNG (bcrypt) ---
 _bcrypt = ctypes.windll.bcrypt
@@ -44,7 +27,6 @@ def _aes_ecb(data, decrypt):
     if st != 0: raise RuntimeError(f"BCrypt status {st:#x}")
     return out.raw[:cb.value]
 def aes_decrypt(data): return _aes_ecb(data, True)
-def aes_encrypt(data): return _aes_ecb(data, False)
 
 FLAGBITS = {1:"Compressed",2:"Encrypted",4:"Signed",8:"Indexed",16:"OnDemand"}
 
@@ -133,28 +115,3 @@ def parse_dir_index(t):
     if dirs:
         walk(0, mount.rstrip("/"))
     return out
-
-
-def read_chunk(t, ucas_path, idx):
-    """Decode chunk idx -> raw uncompressed bytes (handles partitions, AES, oodle)."""
-    off, length = t.offlen[idx]
-    first = off // t.cblk_size
-    nblk = (length + t.cblk_size - 1) // t.cblk_size
-    out = bytearray()
-    f = open(ucas_path, "rb")
-    for bi in range(first, first+nblk):
-        bo, cs, us, mi = t.blocks[bi]
-        # partition: physical file offset
-        part = bo // t.partition_size if t.partition_size and t.partition_size != 0xFFFFFFFFFFFFFFFF else 0
-        local = bo % t.partition_size if part else bo
-        f.seek(local)
-        aligned = (cs + 15) & ~15 if t.encrypted else cs
-        data = f.read(aligned)
-        if t.encrypted: data = aes_decrypt(data)[:cs]
-        method = t.methods[mi-1] if mi > 0 else "None"
-        if method == "None":
-            out += data[:us]
-        else:
-            out += oodle_decompress(data, us)
-    f.close()
-    return bytes(out[:length])

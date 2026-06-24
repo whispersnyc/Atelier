@@ -69,6 +69,14 @@ def game_rel_from_token(tok):
                 return gr
     return None
 
+def _classify_file(name):
+    nl = name.lower()
+    if nl.startswith("t_"):
+        return "texture"
+    if nl.startswith(("ns_", "fx_", "vfx_", "nfx_", "p_", "niagara_")):
+        return "vfx"
+    return "other"
+
 def browse(skin_id, subpath=""):
     """Return immediate children of `subpath` inside `skin_id`."""
     entries = skin_entries(skin_id)
@@ -102,12 +110,13 @@ def browse(skin_id, subpath=""):
         imported = os.path.exists(base + ".png")
         tok      = token(td["game_rel"]) if imported else None
         result.append({
-            "type":     "texture",
-            "name":     name,
-            "rel_path": td["rel_path"],
-            "game_rel": td["game_rel"],
-            "imported": imported,
-            "token":    tok,
+            "type":      "texture",
+            "file_type": _classify_file(name),
+            "name":      name,
+            "rel_path":  td["rel_path"],
+            "game_rel":  td["game_rel"],
+            "imported":  imported,
+            "token":     tok,
         })
     return result
 

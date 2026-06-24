@@ -1,15 +1,15 @@
 /* ── reset / tokens ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg:       #0a0b0f;
-  --bg2:      #111318;
-  --bg3:      #181a22;
-  --border:   #252833;
-  --border2:  #353848;
-  --text:     #e8eaf2;
-  --muted:    #7a7f96;
-  --acc:      #e8534a;
-  --acc2:     #ff6b61;
+  --bg:       #0f1012;
+  --bg2:      #171819;
+  --bg3:      #1d1e20;
+  --border:   #252628;
+  --border2:  #303133;
+  --text:     #f0f0f0;
+  --muted:    #808080;
+  --acc:      #cc2028;
+  --acc2:     #e52530;
   --blue:     #5b8ff9;
   --green:    #4caf7d;
   --yellow:   #f0c040;
@@ -173,8 +173,12 @@ body {
   color: var(--muted);
   opacity: .7;
 }
-.card-thumb .card-icon.folder-icon { color: var(--yellow); opacity: 1; }
-.card-thumb .card-icon.char-icon   { color: var(--blue);   opacity: 1; }
+.card-thumb .card-icon.folder-icon         { color: var(--yellow); opacity: 1; }
+.card-thumb .card-icon.char-icon           { color: var(--blue);   opacity: 1; }
+.card-thumb .card-icon.texture-folder-icon { color: #22c4d0;       opacity: 1; }
+.card-thumb .card-icon.texture-icon        { color: #e8923a;       opacity: 1; }
+.card-thumb .card-icon.vfx-icon            { color: #c472e8;       opacity: 1; }
+.card-thumb .card-icon.unhandled-icon      { color: var(--muted);  opacity: .7; }
 .card-name {
   font-size: 11px;
   color: var(--muted);
@@ -245,7 +249,7 @@ body {
   transition: color .12s, background .12s;
   flex-shrink: 0;
 }
-.clear-all-btn:hover { color: var(--acc); background: rgba(232,83,74,.1); }
+.clear-all-btn:hover { color: var(--acc); background: rgba(204,32,40,.1); }
 .sb-clear {
   width: 20px; height: 20px;
   border: none;
@@ -258,7 +262,7 @@ body {
   padding: 0;
   transition: color .12s, background .12s;
 }
-.sb-clear:hover { color: var(--acc); background: rgba(232,83,74,.12); }
+.sb-clear:hover { color: var(--acc); background: rgba(204,32,40,.12); }
 #sidebar-list {
   flex: 1;
   overflow-y: auto;
@@ -274,7 +278,7 @@ body {
   border-left: 3px solid transparent;
 }
 .sb-item:hover { background: var(--bg3); }
-.sb-item.selected { border-left-color: var(--acc); background: rgba(232,83,74,.07); }
+.sb-item.selected { border-left-color: var(--acc); background: rgba(204,32,40,.07); }
 .sb-thumb {
   width: 44px; height: 44px;
   border-radius: 5px;

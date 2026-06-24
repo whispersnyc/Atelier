@@ -13,4 +13,4 @@
 Noobmaster and Whisper (Atelier)  
 Natimerry (repak-rivals's retoc cli)  
 atenfyr (UAssetGUI's primary dev)
-Saturn (spacehost)
+Saturn (spacehost, RepakX style)

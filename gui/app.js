@@ -186,17 +186,25 @@ async function renderBrowse() {
   document.getElementById("import-all-btn").disabled = textures.length === 0;
 
   buildGrid(data.map(item => {
-    if (item.type === "folder") return {
-      type:   "folder",
-      label:  item.name,
-      icon:   "folder",
-      iconCls:"folder-icon",
-      onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: nav.skin_id,
-                               path: item.rel_path }),
-    };
+    if (item.type === "folder") {
+      const isTextures = /^textures?$/i.test(item.name);
+      return {
+        type:   "folder",
+        label:  item.name,
+        icon:   isTextures ? "images" : "folder",
+        iconCls: isTextures ? "texture-folder-icon" : "folder-icon",
+        onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: nav.skin_id,
+                                 path: item.rel_path }),
+      };
+    }
+    const ft = item.file_type || "other";
     return {
       type:     "texture",
+      file_type: ft,
       label:    item.name,
+      iconCls:  ft === "texture" ? "texture-icon"
+              : ft === "vfx"     ? "vfx-icon"
+              : "unhandled-icon",
       imported: item.imported,
       token:    item.token,
       game_rel: item.game_rel,
@@ -260,8 +268,12 @@ function buildGrid(cards) {
 
 function makeIcon(card) {
   const i = document.createElement("i");
-  i.dataset.lucide = card.iconCls === "folder-icon" ? "folder"
-                   : card.iconCls === "char-icon"   ? "square-user-round"
+  i.dataset.lucide = card.iconCls === "folder-icon"         ? "folder"
+                   : card.iconCls === "texture-folder-icon" ? "images"
+                   : card.iconCls === "char-icon"           ? "square-user-round"
+                   : card.iconCls === "texture-icon"        ? "image"
+                   : card.iconCls === "vfx-icon"            ? "sparkles"
+                   : card.iconCls === "unhandled-icon"      ? "file-question"
                    : "image";
   i.className = `card-icon ${card.iconCls || ""}`;
   i.setAttribute("size", "40");
@@ -285,13 +297,21 @@ document.getElementById("search-input").addEventListener("input", () => {
       onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: s.skin_id, path: "" }),
     })));
   } else if (nav.level >= 2 && allItems.length) {
-    buildGrid(allItems.map(item => item.type === "folder"
-      ? { type: "folder", label: item.name, icon: "folder", iconCls: "folder-icon",
-          onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: nav.skin_id, path: item.rel_path }) }
-      : { type: "texture", label: item.name, imported: item.imported, token: item.token,
-          game_rel: item.game_rel, rel_path: item.rel_path,
-          onClick: () => handleTextureClick(item) }
-    ));
+    buildGrid(allItems.map(item => {
+      if (item.type === "folder") {
+        const isTextures = /^textures?$/i.test(item.name);
+        return { type: "folder", label: item.name,
+          icon: isTextures ? "images" : "folder",
+          iconCls: isTextures ? "texture-folder-icon" : "folder-icon",
+          onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: nav.skin_id, path: item.rel_path }) };
+      }
+      const ft = item.file_type || "other";
+      return { type: "texture", file_type: ft, label: item.name,
+        iconCls: ft === "texture" ? "texture-icon" : ft === "vfx" ? "vfx-icon" : "unhandled-icon",
+        imported: item.imported, token: item.token,
+        game_rel: item.game_rel, rel_path: item.rel_path,
+        onClick: () => handleTextureClick(item) };
+    }));
   }
   renderSidebar();
 });

@@ -4,7 +4,8 @@ from bottle import request, response, static_file
 from atelier.web.app import app
 from atelier.config import ASSETS, ASSETS_MODS, PAKS, GUI_DIR, get_prereq_status
 from atelier.tools import uat
-from atelier.handlers.texture import decode_batch, stage_inject, cmd_export
+from atelier.handlers.texture import decode_batch, stage_inject, build_mod
+from atelier.handlers.material import mat_json, is_material
 from atelier.paths import game_rel_for_skin
 from atelier.web.browse import (browse, all_char_ids, char_skin_ids, char_name, skin_name,
                                 token, game_rel_from_token, all_imported)
@@ -99,10 +100,10 @@ def api_imported():
     response.content_type = "application/json"
     return json.dumps(all_imported())
 
-# ── single import ─────────────────────────────────────────────────────────────
+# ── single import (texture) ────────────────────────────────────────────────────
 
-@app.post("/api/import")
-def api_import_one():
+@app.post("/api/import_texture")
+def api_import_texture():
     body    = request.json or {}
     skin_id = body.get("skin_id", "")
     rel     = body.get("rel_path", "")
@@ -122,6 +123,32 @@ def api_import_one():
             msg = "decode failed — PNG not created" if uasset_exists else "extraction failed — asset not found in pak"
             response.content_type = "application/json"
             return json.dumps({"ok": False, "error": msg, "game_rel": gr})
+        response.content_type = "application/json"
+        return json.dumps({"ok": True, "token": token(gr), "game_rel": gr})
+    except Exception as e:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": str(e)})
+
+# ── vfx import (placeholder) ─────────────────────────────────────────────────
+
+@app.post("/api/import_vfx")
+def api_import_vfx():
+    response.content_type = "application/json"
+    return json.dumps({"ok": False, "error": "VFX handler not yet implemented"})
+
+# ── material import ───────────────────────────────────────────────────────────
+
+@app.post("/api/import_material")
+def api_import_material():
+    body    = request.json or {}
+    skin_id = body.get("skin_id", "")
+    rel     = body.get("rel_path", "")
+    if not skin_id or not rel:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": "missing skin_id or rel_path"})
+    try:
+        gr = game_rel_for_skin(skin_id, rel)
+        mat_json(gr)
         response.content_type = "application/json"
         return json.dumps({"ok": True, "token": token(gr), "game_rel": gr})
     except Exception as e:
@@ -266,7 +293,7 @@ def api_open_explorer():
 @app.post("/api/export")
 def api_export():
     body     = request.json or {}
-    mod_name = (body.get("mod_name") or "TextureMod").strip() or "TextureMod"
+    mod_name = (body.get("mod_name") or "Mod").strip() or "Mod"
     items    = body.get("items", [])
     if not items:
         response.content_type = "application/json"
@@ -276,13 +303,13 @@ def api_export():
     os.makedirs(out_dir, exist_ok=True)
 
     try:
-        cmd_export(mod_name, items, out_dir, force=True)
-        stem = f"{mod_name}_9999999_P"
-        utoc = os.path.join(out_dir, stem + ".utoc")
-        if not os.path.exists(utoc):
-            made = sorted(glob.glob(os.path.join(out_dir, "*_P.utoc")))
-            utoc = made[-1] if made else None
-        pak = utoc[:-5] + ".pak" if utoc else None
+        tex_items = [gr for gr in items if not is_material(gr)]
+        mat_items = [{"game_rel": gr, "colors": {}, "scalars": {}} for gr in items if is_material(gr)]
+        result = build_mod(mod_name, tex_items, mat_items, out_dir, force=True)
+        if not result.get("ok"):
+            response.content_type = "application/json"
+            return json.dumps({"ok": False, "error": result.get("error", "build failed")})
+        pak = result.get("pak")
         response.content_type = "application/json"
         return json.dumps({"ok": bool(pak), "pak_path": pak.replace("\\", "/") if pak else None})
     except Exception as e:
@@ -299,7 +326,7 @@ def api_delete_imported():
         response.content_type = "application/json"
         return json.dumps({"ok": False, "error": "missing game_rel"})
     base = os.path.join(ASSETS, *gr.split("/"))
-    for ext in (".png", ".uasset", ".uexp", ".ubulk"):
+    for ext in (".png", ".uasset", ".uexp", ".ubulk", ".json"):
         p = base + ext
         if os.path.exists(p):
             try: os.remove(p)
@@ -312,7 +339,7 @@ def api_delete_all_imported():
     items = all_imported()
     for item in items:
         base = os.path.join(ASSETS, *item["game_rel"].split("/"))
-        for ext in (".png", ".uasset", ".uexp", ".ubulk"):
+        for ext in (".png", ".uasset", ".uexp", ".ubulk", ".json"):
             p = base + ext
             if os.path.exists(p):
                 try: os.remove(p)

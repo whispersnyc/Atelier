@@ -75,6 +75,8 @@ def _classify_file(name):
         return "texture"
     if nl.startswith(("ns_", "fx_", "vfx_", "nfx_", "p_", "niagara_")):
         return "vfx"
+    if nl.startswith("mi_"):
+        return "material"
     return "other"
 
 def browse(skin_id, subpath=""):
@@ -83,8 +85,8 @@ def browse(skin_id, subpath=""):
     subpath = subpath.strip("/")
     prefix  = (subpath + "/") if subpath else ""
 
-    folders  = {}
-    textures = {}
+    folders = {}
+    files   = {}
 
     for pak_path, _cont in entries:
         rel = skin_rel(pak_path, skin_id)
@@ -99,19 +101,21 @@ def browse(skin_id, subpath=""):
             folders[folder_name] = folder_path
         else:
             gr = game_rel_for_skin(skin_id, (prefix + rest).strip("/"))
-            textures[rest] = {"rel_path": (prefix + rest).strip("/"), "game_rel": gr}
+            files[rest] = {"rel_path": (prefix + rest).strip("/"), "game_rel": gr}
 
     result = []
     for name in sorted(folders, key=str.lower):
         result.append({"type": "folder", "name": name, "rel_path": folders[name]})
-    for name in sorted(textures, key=str.lower):
-        td       = textures[name]
-        base     = os.path.join(ASSETS, *td["game_rel"].split("/"))
-        imported = os.path.exists(base + ".png")
+    for name in sorted(files, key=str.lower):
+        td     = files[name]
+        base   = os.path.join(ASSETS, *td["game_rel"].split("/"))
+        ft     = _classify_file(name)
+        is_mat = ft == "material"
+        imported = os.path.exists(base + (".json" if is_mat else ".png"))
         tok      = token(td["game_rel"]) if imported else None
         result.append({
-            "type":      "texture",
-            "file_type": _classify_file(name),
+            "type":      "asset",
+            "file_type": ft,
             "name":      name,
             "rel_path":  td["rel_path"],
             "game_rel":  td["game_rel"],
@@ -121,7 +125,7 @@ def browse(skin_id, subpath=""):
     return result
 
 def all_imported():
-    """Walk assets/ and return every imported texture that has a .png."""
+    """Walk assets/ and return all imported assets (PNG-backed textures and JSON-backed materials)."""
     items      = []
     chars_root = os.path.join(ASSETS, "Marvel", "Content", "Marvel", "Characters")
     if not os.path.isdir(chars_root):
@@ -134,18 +138,34 @@ def all_imported():
             if not os.path.isdir(skin_dir): continue
             for dirpath, _, files in os.walk(skin_dir):
                 for fname in sorted(files):
-                    if not fname.endswith(".png"): continue
-                    tex_name = fname[:-4]
-                    abs_png  = os.path.join(dirpath, fname)
-                    gr       = os.path.relpath(abs_png[:-4], ASSETS).replace("\\", "/")
-                    items.append({
-                        "token":     token(gr),
-                        "game_rel":  gr,
-                        "name":      tex_name,
-                        "skin_id":   sid,
-                        "char_id":   cid,
-                        "char_name": char_name(cid),
-                        "skin_name": skin_name(sid),
-                        "mtime":     int(os.path.getmtime(abs_png)),
-                    })
+                    if fname.endswith(".png"):
+                        tex_name = fname[:-4]
+                        abs_png  = os.path.join(dirpath, fname)
+                        gr       = os.path.relpath(abs_png[:-4], ASSETS).replace("\\", "/")
+                        items.append({
+                            "token":     token(gr),
+                            "game_rel":  gr,
+                            "name":      tex_name,
+                            "file_type": "texture",
+                            "skin_id":   sid,
+                            "char_id":   cid,
+                            "char_name": char_name(cid),
+                            "skin_name": skin_name(sid),
+                            "mtime":     int(os.path.getmtime(abs_png)),
+                        })
+                    elif fname.endswith(".json") and _classify_file(fname[:-5]) == "material":
+                        mat_name = fname[:-5]
+                        abs_json = os.path.join(dirpath, fname)
+                        gr       = os.path.relpath(abs_json[:-5], ASSETS).replace("\\", "/")
+                        items.append({
+                            "token":     token(gr),
+                            "game_rel":  gr,
+                            "name":      mat_name,
+                            "file_type": "material",
+                            "skin_id":   sid,
+                            "char_id":   cid,
+                            "char_name": char_name(cid),
+                            "skin_name": skin_name(sid),
+                            "mtime":     int(os.path.getmtime(abs_json)),
+                        })
     return items

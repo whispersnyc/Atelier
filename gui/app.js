@@ -16,6 +16,44 @@ let   pendingClear  = null;  // sidebar item to delete
 let   pendingImportAll = null;       // captured texture set for "Import All" (respects search filter)
 let   suppressChangeToastUntil = 0;  // swallow watcher "updated on disk" toasts during our own imports
 
+// ── handler registry ──────────────────────────────────────────────────────────
+// Add a new entry here when a new asset type handler is implemented.
+const ASSET_HANDLERS = {
+  texture:  { endpoint: "/api/import_texture",  preview: true,  icon: "image" },
+  material: { endpoint: "/api/import_material", preview: false, icon: "circle-star" },
+  vfx:      { endpoint: "/api/import_vfx",      preview: false,  icon: "sparkles"   },
+};
+function handlerFor(ft) { return ASSET_HANDLERS[ft] || { endpoint: "/api/import", preview: false, icon: "file-question" }; }
+
+const ASSET_ICON_CLS = {
+  texture:  "texture-icon",
+  vfx:      "vfx-icon",
+  material: "material-icon",
+};
+function assetIconCls(ft) { return ASSET_ICON_CLS[ft] || "unhandled-icon"; }
+
+const FOLDER_ICON_PATTERNS = [
+  [/^textures?$/i,      "texture-folder-icon"],
+  [/^materials?$/i,     "material-folder-icon"],
+  [/^(vfx|effects?)$/i, "vfx-folder-icon"],
+];
+function folderIconCls(name) {
+  const hit = FOLDER_ICON_PATTERNS.find(([re]) => re.test(name));
+  return hit ? hit[1] : "folder-icon";
+}
+
+const ICON_CLS_TO_LUCIDE = {
+  "folder-icon":          "folder",
+  "texture-folder-icon":  "image",
+  "material-folder-icon": "circle-star",
+  "vfx-folder-icon":      "sparkles",
+  "char-icon":            "square-user-round",
+  "texture-icon":         "image",
+  "vfx-icon":             "sparkles",
+  "material-icon":        "circle-star",
+  "unhandled-icon":       "file-question",
+};
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
@@ -182,34 +220,30 @@ async function renderBrowse() {
   if (data.error) throw new Error(data.error);
   allItems = data;
 
-  const textures = data.filter(d => d.type === "texture");
-  document.getElementById("import-all-btn").disabled = textures.length === 0;
+  const importable = data.filter(d => d.type === "asset" && d.file_type === "texture");
+  document.getElementById("import-all-btn").disabled = importable.length === 0;
 
   buildGrid(data.map(item => {
     if (item.type === "folder") {
-      const isTextures = /^textures?$/i.test(item.name);
       return {
-        type:   "folder",
-        label:  item.name,
-        icon:   isTextures ? "images" : "folder",
-        iconCls: isTextures ? "texture-folder-icon" : "folder-icon",
+        type:    "folder",
+        label:   item.name,
+        iconCls: folderIconCls(item.name),
         onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: nav.skin_id,
                                  path: item.rel_path }),
       };
     }
     const ft = item.file_type || "other";
     return {
-      type:     "texture",
+      type:      "asset",
       file_type: ft,
-      label:    item.name,
-      iconCls:  ft === "texture" ? "texture-icon"
-              : ft === "vfx"     ? "vfx-icon"
-              : "unhandled-icon",
-      imported: item.imported,
-      token:    item.token,
-      game_rel: item.game_rel,
-      rel_path: item.rel_path,
-      onClick:  () => handleTextureClick(item),
+      label:     item.name,
+      iconCls:   assetIconCls(ft),
+      imported:  item.imported,
+      token:     item.token,
+      game_rel:  item.game_rel,
+      rel_path:  item.rel_path,
+      onClick:   () => handleAssetClick(item),
     };
   }));
 }
@@ -240,7 +274,7 @@ function buildGrid(cards) {
     const thumb = document.createElement("div");
     thumb.className = "card-thumb";
 
-    if (card.type === "texture" && card.imported && card.token) {
+    if (card.type === "asset" && card.imported && card.token && handlerFor(card.file_type).preview) {
       const img = document.createElement("img");
       img.src = `/api/preview?token=${card.token}&game_rel=${encodeURIComponent(card.game_rel)}`;
       img.alt = card.label;
@@ -268,13 +302,7 @@ function buildGrid(cards) {
 
 function makeIcon(card) {
   const i = document.createElement("i");
-  i.dataset.lucide = card.iconCls === "folder-icon"         ? "folder"
-                   : card.iconCls === "texture-folder-icon" ? "images"
-                   : card.iconCls === "char-icon"           ? "square-user-round"
-                   : card.iconCls === "texture-icon"        ? "image"
-                   : card.iconCls === "vfx-icon"            ? "sparkles"
-                   : card.iconCls === "unhandled-icon"      ? "file-question"
-                   : "image";
+  i.dataset.lucide = ICON_CLS_TO_LUCIDE[card.iconCls] || "file-question";
   i.className = `card-icon ${card.iconCls || ""}`;
   i.setAttribute("size", "40");
   return i;
@@ -299,39 +327,43 @@ document.getElementById("search-input").addEventListener("input", () => {
   } else if (nav.level >= 2 && allItems.length) {
     buildGrid(allItems.map(item => {
       if (item.type === "folder") {
-        const isTextures = /^textures?$/i.test(item.name);
         return { type: "folder", label: item.name,
-          icon: isTextures ? "images" : "folder",
-          iconCls: isTextures ? "texture-folder-icon" : "folder-icon",
+          iconCls: folderIconCls(item.name),
           onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: nav.skin_id, path: item.rel_path }) };
       }
       const ft = item.file_type || "other";
-      return { type: "texture", file_type: ft, label: item.name,
-        iconCls: ft === "texture" ? "texture-icon" : ft === "vfx" ? "vfx-icon" : "unhandled-icon",
+      return { type: "asset", file_type: ft, label: item.name,
+        iconCls: assetIconCls(ft),
         imported: item.imported, token: item.token,
         game_rel: item.game_rel, rel_path: item.rel_path,
-        onClick: () => handleTextureClick(item) };
+        onClick: () => handleAssetClick(item) };
     }));
   }
   renderSidebar();
 });
 
-// ── texture click / single import ─────────────────────────────────────────────
+// ── asset click / single import ───────────────────────────────────────────────
 function handleImportedFileAction(item) {
   const ft = item.file_type || "texture";
-  if (ft === "texture") {
-    fetch(`/api/open_explorer?game_rel=${encodeURIComponent(item.game_rel)}`);
+  switch (ft) {
+    case "material":
+      return; // material parameter menu — to be implemented
+    default:
+      fetch(`/api/open_explorer?game_rel=${encodeURIComponent(item.game_rel)}`);
   }
 }
 
-function handleTextureClick(item) {
+function handleAssetClick(item) {
   if (item.imported && item.token) {
     handleImportedFileAction(item);
     return;
   }
+  const ft   = item.file_type || "other";
+  const kind = ft.charAt(0).toUpperCase() + ft.slice(1);
+  document.getElementById("confirm-title").textContent = `Import ${kind}?`;
   document.getElementById("confirm-msg").textContent =
-    `Import "${item.name}" from skin ${nav.skin_id}?`;
-  pendingImport = { skin_id: nav.skin_id, rel_path: item.rel_path, game_rel: item.game_rel, name: item.name };
+    `Import ${ft} "${item.name}" from skin ${nav.skin_id}?`;
+  pendingImport = { skin_id: nav.skin_id, rel_path: item.rel_path, game_rel: item.game_rel, name: item.name, file_type: ft };
   document.getElementById("confirm-overlay").classList.add("active");
 }
 
@@ -347,7 +379,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
   suppressChangeToastUntil = Date.now() + 2500;
   setStatus(`Importing ${item.name}…`);
   try {
-    const res = await api("/api/import", {
+    const res = await api(handlerFor(item.file_type).endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ skin_id: item.skin_id, rel_path: item.rel_path }),
@@ -370,7 +402,8 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
 // ── import all ────────────────────────────────────────────────────────────────
 function _shownTextures() {
   const q = document.getElementById("search-input").value.trim().toLowerCase();
-  return allItems.filter(i => i.type === "texture" && (!q || (i.name || i.label || "").toLowerCase().includes(q)));
+  return allItems.filter(i => i.type === "asset" && i.file_type === "texture"
+    && (!q || (i.name || i.label || "").toLowerCase().includes(q)));
 }
 
 document.getElementById("import-all-btn").addEventListener("click", () => {
@@ -422,7 +455,7 @@ document.getElementById("confirm-all-ok").addEventListener("click", async () => 
 });
 
 function showProgress(current, total) {
-  document.getElementById("prog-counter").textContent = `Downloading ${current} / ${total} textures…`;
+  document.getElementById("prog-counter").textContent = `Downloading ${current} / ${total} assets…`;
 }
 
 // ── prevent accidental close during import ────────────────────────────────────
@@ -456,7 +489,7 @@ function handleSSE(d) {
       img.src = `/api/preview${bust}`;
     });
     if (!importing && Date.now() >= suppressChangeToastUntil) {
-      toast("Texture updated on disk — preview refreshed", "warning", 4000);
+      toast("Asset updated on disk — preview refreshed", "warning", 4000);
     }
     return;
   }
@@ -511,7 +544,7 @@ function renderSidebar() {
   list.innerHTML = "";
   const all = Object.values(sidebarData);
   if (!all.length) {
-    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No textures imported yet.</div>';
+    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No assets imported yet.</div>';
     updateExportBtn();
     return;
   }
@@ -521,7 +554,7 @@ function renderSidebar() {
         (i.skin_name || "").toLowerCase().includes(q) ||
         (i.char_name || "").toLowerCase().includes(q)) : all;
   if (!items.length) {
-    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No staged textures match the search.</div>';
+    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No staged assets match the search.</div>';
     updateExportBtn();
     return;
   }
@@ -529,11 +562,14 @@ function renderSidebar() {
     const el = document.createElement("div");
     el.className = "sb-item" + (item.selected ? " selected" : "");
     el.dataset.token = item.token;
+    const h = handlerFor(item.file_type);
     el.innerHTML = `
-      <button class="sb-clear" title="Delete texture"><i data-lucide="x" size="12"></i></button>
+      <button class="sb-clear" title="Delete"><i data-lucide="x" size="12"></i></button>
       <div class="sb-thumb">
-        <img src="/api/preview?token=${item.token}&game_rel=${encodeURIComponent(item.game_rel)}"
-             alt="" onerror="this.style.opacity='.3'">
+        ${h.preview
+          ? `<img src="/api/preview?token=${item.token}&game_rel=${encodeURIComponent(item.game_rel)}"
+               alt="" onerror="this.style.opacity='.3'">`
+          : `<i data-lucide="${h.icon || 'file-question'}" size="32" class="card-icon ${assetIconCls(item.file_type)}"></i>`}
       </div>
       <div class="sb-info">
         <div class="sb-name">${item.name}</div>
@@ -568,7 +604,7 @@ document.getElementById("export-btn").addEventListener("click", async () => {
   if (!selected.length) return;
   const modName = document.getElementById("mod-name-input").value.trim() || "ModFilename";
   const items   = selected.map(i => i.game_rel);
-  setStatus(`Exporting ${items.length} texture${items.length !== 1 ? "s" : ""}…`);
+  setStatus(`Exporting ${items.length} asset${items.length !== 1 ? "s" : ""}…`);
   document.getElementById("export-btn").disabled = true;
   try {
     const res = await api("/api/export", {
@@ -597,6 +633,9 @@ function clearImported(token) {
   const item = sidebarData[token];
   if (!item) return;
   pendingClear = item;
+  const ft   = item.file_type || "asset";
+  const kind = ft.charAt(0).toUpperCase() + ft.slice(1);
+  document.getElementById("confirm-clear-title").textContent = `Delete ${kind}?`;
   document.getElementById("confirm-clear-msg").textContent =
     `Delete "${item.name}" from local assets? This will remove the imported file.`;
   document.getElementById("confirm-clear-overlay").classList.add("active");
@@ -632,9 +671,9 @@ document.getElementById("confirm-clear-ok").addEventListener("click", async () =
 
 document.getElementById("clear-all-btn").addEventListener("click", () => {
   const count = Object.keys(sidebarData).length;
-  if (!count) { toast("No imported textures to clear", "info"); return; }
+  if (!count) { toast("No imported assets to clear", "info"); return; }
   document.getElementById("confirm-clear-all-msg").textContent =
-    `All ${count} imported texture${count !== 1 ? "s" : ""} will be permanently deleted from local assets.`;
+    `All ${count} imported asset${count !== 1 ? "s" : ""} will be permanently deleted from local assets.`;
   document.getElementById("confirm-clear-all-overlay").classList.add("active");
 });
 
@@ -653,7 +692,7 @@ document.getElementById("confirm-clear-all-ok").addEventListener("click", async 
     if (res.ok) {
       sidebarData = {};
       renderSidebar();
-      toast(`Deleted ${res.deleted} imported texture${res.deleted !== 1 ? "s" : ""}`, "warning", 4000);
+      toast(`Deleted ${res.deleted} imported asset${res.deleted !== 1 ? "s" : ""}`, "warning", 4000);
       if (nav.level >= 2) renderBrowse().catch(() => {});
     } else {
       toast(`Delete failed: ${res.error}`, "warning");

@@ -49,7 +49,7 @@
         <i data-lucide="package" size="13"></i>
         Export Staging
       </div>
-      <button class="clear-all-btn" id="clear-all-btn" title="Delete all imported textures">Clear All</button>
+      <button class="clear-all-btn" id="clear-all-btn" title="Delete all imported assets">Clear All</button>
     </div>
     <div id="sidebar-list"></div>
     <div id="sidebar-footer">
@@ -66,8 +66,8 @@
 <!-- ── confirm: single import ── -->
 <div class="overlay" id="confirm-overlay">
   <div class="modal">
-    <h2><i data-lucide="download" size="18" style="color:var(--acc)"></i> Import Texture?</h2>
-    <p id="confirm-msg">Extract and decode this texture to your local assets folder?</p>
+    <h2><i data-lucide="download" size="18" style="color:var(--acc)"></i> <span id="confirm-title">Import Asset?</span></h2>
+    <p id="confirm-msg">Extract this asset to your local assets folder?</p>
     <div class="modal-row">
       <button class="btn" id="confirm-cancel">Cancel</button>
       <button class="btn primary" id="confirm-ok">Import</button>
@@ -97,8 +97,8 @@
 <!-- ── confirm: clear one ── -->
 <div class="overlay" id="confirm-clear-overlay">
   <div class="modal">
-    <h2><i data-lucide="trash-2" size="18" style="color:var(--acc)"></i> Delete Texture?</h2>
-    <p id="confirm-clear-msg">Delete this imported texture from local assets?</p>
+    <h2><i data-lucide="trash-2" size="18" style="color:var(--acc)"></i> <span id="confirm-clear-title">Delete Asset?</span></h2>
+    <p id="confirm-clear-msg">Delete this imported asset from local assets?</p>
     <div class="modal-row">
       <button class="btn" id="confirm-clear-cancel">Cancel</button>
       <button class="btn primary" id="confirm-clear-ok">Delete</button>
@@ -110,10 +110,10 @@
 <div class="overlay" id="confirm-clear-all-overlay">
   <div class="modal">
     <h2><i data-lucide="trash-2" size="18" style="color:var(--acc)"></i> Delete All Imported?</h2>
-    <p id="confirm-clear-all-msg">All imported textures will be permanently deleted from local assets.</p>
+    <p id="confirm-clear-all-msg">All imported assets will be permanently deleted from local assets.</p>
     <div class="warning">
       <i data-lucide="alert-triangle" size="14" style="flex-shrink:0;margin-top:2px"></i>
-      <span>This cannot be undone. You will need to re-import textures to use them again.</span>
+      <span>This cannot be undone. You will need to re-import assets to use them again.</span>
     </div>
     <div class="modal-row">
       <button class="btn" id="confirm-clear-all-cancel">Cancel</button>
@@ -128,8 +128,8 @@
 <!-- ── progress overlay (un-closable) ── -->
 <div class="overlay" id="prog-overlay">
   <div id="prog-box">
-    <h2><div class="spinner"></div> Importing Textures…</h2>
-    <div id="prog-counter" style="font-size:13px;color:var(--muted)">Downloading 0 / 0 textures…</div>
+    <h2><div class="spinner"></div> Importing Assets…</h2>
+    <div id="prog-counter" style="font-size:13px;color:var(--muted)">Downloading 0 / 0 assets…</div>
     <div class="warning" style="margin-top:4px">
       <i data-lucide="shield-alert" size="14" style="flex-shrink:0;margin-top:2px"></i>
       <span>Import in progress — closing this tab may leave assets in an incomplete state.</span>

@@ -179,9 +179,12 @@ body {
 }
 .card-thumb .card-icon.folder-icon         { color: var(--yellow); opacity: 1; }
 .card-thumb .card-icon.char-icon           { color: var(--blue);   opacity: 1; }
-.card-thumb .card-icon.texture-folder-icon { color: #22c4d0;       opacity: 1; }
-.card-thumb .card-icon.texture-icon        { color: #4a7fd4;       opacity: 1; }
-.card-thumb .card-icon.vfx-icon            { color: #c472e8;       opacity: 1; }
+.card-thumb .card-icon.texture-folder-icon  { color: #22c4d0;       opacity: 1; }
+.card-thumb .card-icon.texture-icon         { color: #22c4d0;       opacity: 1; }
+.card-thumb .card-icon.vfx-icon             { color: #c472e8;       opacity: 1; }
+.card-thumb .card-icon.vfx-folder-icon      { color: #c472e8;       opacity: 1; }
+.card-thumb .card-icon.material-folder-icon { color: #70d022;       opacity: 1; }
+.card-thumb .card-icon.material-icon        { color: #70d022;       opacity: 1; }
 .card-thumb .card-icon.unhandled-icon      { color: var(--muted);  opacity: .7; }
 .card-name {
   font-size: 11px;

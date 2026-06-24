@@ -441,7 +441,11 @@ function handleSSE(d) {
     importing = false;
     suppressChangeToastUntil = Date.now() + 2500;
     document.getElementById("prog-overlay").classList.remove("active");
-    toast(`Imported ${d.current} texture${d.current !== 1 ? "s" : ""}`, "success");
+    if (d.error) {
+      toast(`Import failed: ${d.error}`, "warning", 8000);
+    } else {
+      toast(`Imported ${d.current} texture${d.current !== 1 ? "s" : ""}`, "success");
+    }
     setStatus("");
     loadSidebar();
     if (nav.level >= 2) renderBrowse().catch(() => {});
@@ -630,9 +634,22 @@ document.getElementById("confirm-clear-all-ok").addEventListener("click", async 
   }
 });
 
+// ── prereq check ─────────────────────────────────────────────────────────────
+async function checkPrereqs() {
+  try {
+    const res = await api("/api/prereqs");
+    if (!res.issues || !res.issues.length) return;
+    res.issues.forEach(issue => {
+      const isError = issue.level === "error";
+      toast(issue.message, isError ? "warning" : "info", isError ? 10000 : 6000);
+    });
+  } catch (e) {}
+}
+
 // ── initial load ──────────────────────────────────────────────────────────────
 async function init() {
   renderBreadcrumbs();
+  await checkPrereqs();
   await renderGrid();
   await loadSidebar();
 }

@@ -60,7 +60,7 @@ def main():
             cmd_export(positional[0], positional[1:], out_dir, force)
         else:
             print(f"Unknown command: {cmd!r}\n"); print(__doc__.strip()); sys.exit(1)
-    except RuntimeError as e:
+    except (RuntimeError, OSError) as e:
         print(f"[error] {e}", file=sys.stderr); sys.exit(1)
 
 if __name__ == "__main__":

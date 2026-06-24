@@ -2,7 +2,7 @@ import os, sys, glob, json, threading, queue, subprocess
 from bottle import request, response, static_file
 
 from atelier.web.app import app
-from atelier.config import ASSETS, ASSETS_MODS, PAKS, GUI_DIR
+from atelier.config import ASSETS, ASSETS_MODS, PAKS, GUI_DIR, get_prereq_status
 from atelier.tools import uat
 from atelier.handlers.texture import decode_batch, stage_inject, cmd_export
 from atelier.paths import game_rel_for_skin
@@ -18,6 +18,13 @@ def index():
 @app.route("/static/<path:path>")
 def static(path):
     return static_file(path, root=GUI_DIR)
+
+# ── prereqs ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/prereqs")
+def api_prereqs():
+    response.content_type = "application/json"
+    return json.dumps(get_prereq_status())
 
 # ── characters ────────────────────────────────────────────────────────────────
 
@@ -110,12 +117,13 @@ def api_import_one():
              "--filter", os.path.basename(gr)])
         decode_batch([dst_base + ".uasset"])
         png_exists = os.path.exists(dst_base + ".png")
+        if not png_exists:
+            uasset_exists = os.path.exists(dst_base + ".uasset")
+            msg = "decode failed — PNG not created" if uasset_exists else "extraction failed — asset not found in pak"
+            response.content_type = "application/json"
+            return json.dumps({"ok": False, "error": msg, "game_rel": gr})
         response.content_type = "application/json"
-        return json.dumps({
-            "ok":       png_exists,
-            "token":    token(gr) if png_exists else None,
-            "game_rel": gr,
-        })
+        return json.dumps({"ok": True, "token": token(gr), "game_rel": gr})
     except Exception as e:
         response.content_type = "application/json"
         return json.dumps({"ok": False, "error": str(e)})

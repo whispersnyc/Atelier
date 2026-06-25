@@ -33,7 +33,7 @@
         <div>Loading index…</div>
       </div>
     </div>
-    <div id="bottombar">
+    <div id="bottombar" style="display:none">
       <button class="btn primary" id="import-all-btn" disabled>
         <i data-lucide="download-cloud" size="15"></i>
         Edit All
@@ -52,11 +52,11 @@
         <i data-lucide="package" size="13"></i>
         Edited Assets
       </div>
-      <button class="clear-all-btn" id="clear-all-btn" title="Delete all edited assets">Clear All</button>
+      <button class="clear-all-btn" id="clear-all-btn" title="Delete all edited assets" style="display:none">Clear All</button>
+      <span id="sel-count">0</span>
     </div>
     <div id="sidebar-list"></div>
     <div id="sidebar-footer">
-      <span id="sel-count">0 selected</span>
       <input id="mod-name-input" type="text" placeholder="ModFilename" maxlength="60">
       <button class="btn primary" id="export-btn" disabled>
         <i data-lucide="archive" size="14"></i>

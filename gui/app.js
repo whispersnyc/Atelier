@@ -730,7 +730,9 @@ function renderSidebar() {
 
 function updateExportBtn() {
   const sel = Object.values(sidebarData).filter(i => i.selected).length;
-  document.getElementById("sel-count").textContent = `${sel} selected`;
+  const badge = document.getElementById("sel-count");
+  badge.textContent = `${sel}`;
+  badge.classList.toggle("active", sel > 0);
   document.getElementById("export-btn").disabled = sel === 0;
 }
 

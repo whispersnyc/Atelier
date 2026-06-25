@@ -41,6 +41,7 @@ def main():
 
     window = webview.create_window("Atelier", URL, width=1400, height=900)
     webview.start(debug=False, gui='edgechromium')
+    os._exit(0)
 
 
 if __name__ == "__main__":

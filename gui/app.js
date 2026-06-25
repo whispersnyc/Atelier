@@ -250,16 +250,18 @@ function buildGrid(cards) {
     if (card.type === "asset" && handlerFor(card.file_type).preview && card.game_rel) {
       const img = document.createElement("img");
       img.dataset.gameRel = card.game_rel;
-      img.style.display = "none";
       img.alt = card.label;
       if (card.imported) {
-        const icon = makeIcon(card);
-        thumb.appendChild(icon);
         if (card.token) img.dataset.token = card.token;
         img.src    = `/api/thumb?game_rel=${encodeURIComponent(card.game_rel)}`;
-        img.onload  = () => { img.style.display = ""; icon.style.display = "none"; };
-        img.onerror = () => { img.style.display = "none"; icon.style.display = ""; };
+        img.onerror = () => {
+          img.style.display = "none";
+          const icon = makeIcon(card);
+          thumb.appendChild(icon);
+          lucide.createIcons({ nodes: [thumb] });
+        };
       } else {
+        img.style.display = "none";
         const spin = document.createElement("div");
         spin.className = "spinner";
         thumb.appendChild(spin);

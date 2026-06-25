@@ -86,6 +86,14 @@ def api_pick_folder():
         response.content_type = "application/json"
         return json.dumps({"ok": False, "path": "", "error": str(e)})
 
+def _validate_paks_path(path):
+    norm = path.replace("\\", "/").rstrip("/")
+    if not norm.lower().endswith("marvelgame/marvel/content/paks"):
+        return "Path must end with MarvelGame/Marvel/Content/Paks"
+    if not os.path.isdir(norm):
+        return "Directory does not exist"
+    return None
+
 @app.post("/api/save_paks")
 def api_save_paks():
     body = request.json or {}
@@ -93,6 +101,10 @@ def api_save_paks():
     if not path:
         response.content_type = "application/json"
         return json.dumps({"ok": False, "error": "no path provided"})
+    err = _validate_paks_path(path)
+    if err:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": err})
     try:
         save_paks_config(path)
         def _restart():

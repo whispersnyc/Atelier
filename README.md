@@ -33,4 +33,4 @@ This supercharged modding interface allows anyone (seriously anyone) to make mod
 - Xzant ([UAssetToolRivals](https://github.com/XzantGaming/UAssetToolRivals))  
 - Natimerry ([repak-rivals](https://github.com/natimerry/repak-rivals/))  
 - Saturn ([Repak-X](https://github.com/XzantGaming/Repak-X) style)
-- donutman07 ([Character IDs](https://raw.githubusercontent.com/donutman07/MarvelRivalsCharacterIDs/))
+- donutman07 ([Character IDs](https://github.com/donutman07/MarvelRivalsCharacterIDs/))

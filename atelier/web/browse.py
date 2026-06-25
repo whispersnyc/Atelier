@@ -1,45 +1,100 @@
-import os, re, hashlib
+import os, re, hashlib, threading, urllib.request
 from atelier.config import ROOT, IMPORT_ROOT
 from atelier.index import ensure_index
 from atelier.paths import (skin_entries, skin_rel, game_rel_for_skin,
                            char_id as get_char_id, PAK_GAME_PREFIX)
+
+_REMOTE_MD_URL   = "https://raw.githubusercontent.com/donutman07/MarvelRivalsCharacterIDs/refs/heads/main/MarvelRivalsCharacterIDs.md"
+_update_callback = None   # set by routes.py to _push_sse after it's defined
+_fetch_attempted = False
+_fetch_lock      = threading.Lock()
 
 # Paths (relative to Marvel/Content/Marvel/) whose immediate children are hero char IDs
 # and grandchildren are skin IDs (both get ID→name labels).
 # Add additional paths here if other areas of the pak use the same numbering scheme.
 HERO_PATHS = ["Characters"]
 
-def _parse_char_md():
-    """Parse MarvelRivalsCharacterIDs.md -> {char_id: {name, skins:{skin_id:name}}}"""
-    path  = os.path.join(ROOT, "Tools", "MarvelRivalsCharacterIDs.md")
+def _parse_char_md_text(text):
+    """Parse MD table text -> {char_id: {name, skins:{skin_id:name}}}"""
     chars = {}
     cur   = None
-    try:
-        for line in open(path, encoding="utf-8"):
-            m = re.match(r'\|\s*(\d{4})\s*\|\s*([^|]+?)\s*\|(?:\s*(\d{7})\s*\|\s*([^|]*?)\s*\|)?', line)
-            if m and m.group(1):
-                cur  = m.group(1)
-                name = m.group(2).strip()
-                if name and name.upper() != "NAME":
-                    chars.setdefault(cur, {"name": name, "skins": {}})
-                    if m.group(3):
-                        chars[cur]["skins"][m.group(3)] = (m.group(4) or "").strip()
-                continue
-            m2 = re.match(r'\|\s*\|\s*\|\s*(\d{7})\s*\|\s*([^|]*?)\s*\|', line)
-            if m2 and cur and cur in chars:
-                chars[cur]["skins"][m2.group(1)] = m2.group(2).strip()
-    except Exception:
-        pass
+    for line in text.splitlines():
+        m = re.match(r'\|\s*(\d{4})\s*\|\s*([^|]+?)\s*\|(?:\s*(\d{7})\s*\|\s*([^|]*?)\s*\|)?', line)
+        if m and m.group(1):
+            cur  = m.group(1)
+            name = m.group(2).strip()
+            if name and name.upper() != "NAME":
+                chars.setdefault(cur, {"name": name, "skins": {}})
+                if m.group(3):
+                    chars[cur]["skins"][m.group(3)] = (m.group(4) or "").strip()
+            continue
+        m2 = re.match(r'\|\s*\|\s*\|\s*(\d{7})\s*\|\s*([^|]*?)\s*\|', line)
+        if m2 and cur and cur in chars:
+            chars[cur]["skins"][m2.group(1)] = m2.group(2).strip()
     return chars
+
+def _parse_char_md():
+    path = os.path.join(ROOT, "Tools", "MarvelRivalsCharacterIDs.md")
+    try:
+        return _parse_char_md_text(open(path, encoding="utf-8").read())
+    except Exception:
+        return {}
+
+def _fetch_char_data():
+    global _CHAR_DATA
+    try:
+        req = urllib.request.Request(
+            _REMOTE_MD_URL,
+            headers={"User-Agent": "Atelier-ModTool/1.0 (character-id-sync)"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            text = r.read().decode("utf-8")
+    except Exception:
+        return
+    new_data = _parse_char_md_text(text)
+    added = 0
+    for cid, info in new_data.items():
+        if cid not in _CHAR_DATA:
+            _CHAR_DATA[cid] = info
+            added += 1 + len(info["skins"])
+        else:
+            for sid, sname in info["skins"].items():
+                if sid not in _CHAR_DATA[cid]["skins"]:
+                    _CHAR_DATA[cid]["skins"][sid] = sname
+                    added += 1
+    if added:
+        # write updated file back so next launch starts with fresh data
+        try:
+            path = os.path.join(ROOT, "Tools", "MarvelRivalsCharacterIDs.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        except Exception:
+            pass
+        if _update_callback:
+            _update_callback({"toast": f"Character IDs updated — {added} new entries added", "toast_type": "success"})
+
+def _try_fetch_once():
+    global _fetch_attempted
+    with _fetch_lock:
+        if _fetch_attempted:
+            return
+        _fetch_attempted = True
+    threading.Thread(target=_fetch_char_data, daemon=True).start()
 
 _CHAR_DATA = _parse_char_md()
 
 def char_name(cid):
-    return _CHAR_DATA.get(cid, {}).get("name") or f"Character {cid}"
+    name = _CHAR_DATA.get(cid, {}).get("name")
+    if not name:
+        _try_fetch_once()
+    return name or f"Character {cid}"
 
 def skin_name(sid):
-    cid = get_char_id(sid)
-    return _CHAR_DATA.get(cid, {}).get("skins", {}).get(sid) or sid
+    cid  = get_char_id(sid)
+    name = _CHAR_DATA.get(cid, {}).get("skins", {}).get(sid)
+    if not name:
+        _try_fetch_once()
+    return name or sid
 
 def token(game_rel):
     return hashlib.md5(game_rel.encode()).hexdigest()[:20]
@@ -73,7 +128,7 @@ def _label_folder(rel_path, folder_name):
         if m and re.match(r"^\d{7}$", folder_name):
             sname  = skin_name(folder_name)
             suffix = folder_name[-3:]
-            return f"{suffix} — Default" if sname == folder_name else f"{suffix} — {sname}"
+            return f"{suffix} — Skin {suffix}" if sname == folder_name else f"{suffix} — {sname}"
     return folder_name
 
 def _browse_pak_level(rel_path):

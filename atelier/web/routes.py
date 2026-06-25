@@ -13,6 +13,7 @@ from atelier.handlers.material import mat_json, is_material, read_material, save
 from atelier.handlers.vfx import read_vfx, is_vfx
 from atelier.paths import game_rel_for_skin, pak_game_path
 from atelier.web.browse import (browse_dispatch, token, game_rel_from_token, all_imported)
+import atelier.web.browse as _browse_mod
 
 # ── extraction helpers ────────────────────────────────────────────────────────
 
@@ -395,6 +396,8 @@ def _push_sse(data: dict):
             try: q.put_nowait(data)
             except queue.Full: dead.append(q)
         for q in dead: _sse_queues.remove(q)
+
+_browse_mod._update_callback = _push_sse
 
 def _run_import_job(items):
     """items: [{skin_id, rel_path, game_rel, name}] — extract+decode all via UAssetTool."""

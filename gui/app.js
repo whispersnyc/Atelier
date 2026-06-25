@@ -595,6 +595,10 @@ function connectSSE() {
 }
 
 function handleSSE(d) {
+  if (d.toast) {
+    toast(d.toast, d.toast_type || "info", 5000);
+    return;
+  }
   if (d.thumb_ready && d.game_rel) {
     const sel = `img[data-game-rel="${CSS.escape(d.game_rel)}"]`;
     document.querySelectorAll(sel).forEach(img => {

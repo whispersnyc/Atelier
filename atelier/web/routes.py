@@ -35,6 +35,15 @@ def _relocate_to_import(game_rel):
         src = src_base + ext
         if os.path.exists(src):
             shutil.move(src, dst_base + ext)
+    # Remove empty source directories left behind after the move
+    assets_root = os.path.abspath(ASSETS)
+    src_dir = os.path.abspath(os.path.dirname(src_base))
+    while src_dir.startswith(assets_root) and src_dir != assets_root:
+        try:
+            os.rmdir(src_dir)
+        except OSError:
+            break
+        src_dir = os.path.dirname(src_dir)
 
 # ── static ────────────────────────────────────────────────────────────────────
 

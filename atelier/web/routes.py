@@ -502,6 +502,43 @@ _observer.start()
 
 # ── open in explorer ──────────────────────────────────────────────────────────
 
+def _open_explorer_focused(args):
+    import ctypes, time
+    user32    = ctypes.windll.user32
+    kernel32  = ctypes.windll.kernel32
+    EnumProc  = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
+    _CLS      = ("CabinetWClass", "ExploreWClass")
+
+    def _explorer_hwnds():
+        found = []
+        buf   = ctypes.create_unicode_buffer(64)
+        def cb(hwnd, _):
+            user32.GetClassNameW(hwnd, buf, 64)
+            if buf.value in _CLS and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+        user32.EnumWindows(EnumProc(cb), 0)
+        return found
+
+    before = set(_explorer_hwnds())
+    proc   = subprocess.Popen(args)
+
+    def _focus():
+        time.sleep(0.6)
+        after  = _explorer_hwnds()
+        target = next((h for h in after if h not in before), None) or (after[0] if after else None)
+        if target:
+            fg_tid  = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+            our_tid = kernel32.GetCurrentThreadId()
+            user32.AttachThreadInput(fg_tid, our_tid, True)
+            user32.ShowWindow(target, 9)      # SW_RESTORE
+            user32.BringWindowToTop(target)
+            user32.SetForegroundWindow(target)
+            user32.AttachThreadInput(fg_tid, our_tid, False)
+
+    threading.Thread(target=_focus, daemon=True).start()
+
+
 @app.get("/api/open_explorer")
 def api_open_explorer():
     path = request.query.get("path", "")
@@ -511,9 +548,9 @@ def api_open_explorer():
     if path:
         abs_path = os.path.abspath(path)
         if os.path.exists(abs_path):
-            subprocess.Popen(["explorer.exe", f"/select,{abs_path}"])
+            _open_explorer_focused(["explorer.exe", f"/select,{abs_path}"])
         elif os.path.isdir(os.path.dirname(abs_path)):
-            subprocess.Popen(["explorer.exe", os.path.dirname(abs_path)])
+            _open_explorer_focused(["explorer.exe", os.path.dirname(abs_path)])
     response.content_type = "application/json"
     return json.dumps({"ok": True})
 

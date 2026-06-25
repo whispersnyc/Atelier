@@ -268,11 +268,15 @@ def api_import_texture():
     body    = request.json or {}
     skin_id = body.get("skin_id", "")
     rel     = body.get("rel_path", "")
-    if not skin_id or not rel:
+    gr_in   = body.get("game_rel", "")
+    if skin_id and rel:
+        gr = game_rel_for_skin(skin_id, rel)   # skin flow (unchanged)
+    elif gr_in:
+        gr = gr_in                             # non-skin flow (e.g. VFX tree) — import by game_rel
+    else:
         response.content_type = "application/json"
-        return json.dumps({"ok": False, "error": "missing skin_id or rel_path"})
+        return json.dumps({"ok": False, "error": "missing skin_id/rel_path or game_rel"})
     try:
-        gr         = game_rel_for_skin(skin_id, rel)
         dst_base   = _import_base(gr)
         work_base  = _cache_import_base(gr)
         os.makedirs(os.path.dirname(dst_base),  exist_ok=True)

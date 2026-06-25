@@ -364,7 +364,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     const res = await api(handlerFor(item.file_type).import_endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ skin_id: item.skin_id, rel_path: item.rel_path }),
+      body: JSON.stringify({ skin_id: item.skin_id, rel_path: item.rel_path, game_rel: item.game_rel }),
     });
     loadingToast.remove();
     suppressedImportGameRels.delete(item.game_rel);

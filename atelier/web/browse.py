@@ -109,6 +109,10 @@ def game_rel_from_token(tok):
                 return gr
     return None
 
+# Only these asset kinds are surfaced in the browser. Everything else
+# (meshes, curves, blueprints, niagara systems, data tables, …) is hidden.
+LISTED_FILE_TYPES = ("material", "texture")
+
 def _classify_file(name):
     nl = name.lower()
     if nl.startswith("t_"):
@@ -132,12 +136,14 @@ def _label_folder(rel_path, folder_name):
     return folder_name
 
 def _browse_pak_level(rel_path):
-    """List immediate folder children at rel_path (relative to Marvel/Content/Marvel/) from pak index."""
+    """List immediate children (folders AND asset files) at rel_path
+    (relative to Marvel/Content/Marvel/) from the pak index."""
     rel_path   = rel_path.strip("/")
     search_pfx = ((PAK_GAME_PREFIX + "/" + rel_path + "/") if rel_path
                   else (PAK_GAME_PREFIX + "/")).lower()
 
     folders = {}  # lower_name -> original_name (first seen)
+    files   = {}  # lower_name -> original_name (first seen), .uasset basenames sans ext
     for pak_path_str, _ in ensure_index():
         clean = re.sub(r"^(\.\./)+", "", pak_path_str.replace("\\", "/"))
         cl    = clean.lower()
@@ -145,12 +151,14 @@ def _browse_pak_level(rel_path):
         if idx < 0:
             continue
         rest = clean[idx + len(search_pfx):]
-        if not rest or "/" not in rest:
+        if not rest:
             continue
-        fname_orig  = rest.split("/")[0]
-        fname_lower = fname_orig.lower()
-        if fname_lower not in folders:
-            folders[fname_lower] = fname_orig
+        if "/" in rest:                          # descendant -> immediate subfolder
+            fname_orig = rest.split("/")[0]
+            folders.setdefault(fname_orig.lower(), fname_orig)
+        elif rest.lower().endswith(".uasset"):   # asset file directly at this level
+            name = rest[:-7]
+            files.setdefault(name.lower(), name)
 
     result = []
     for fname_lower in sorted(folders):
@@ -158,6 +166,25 @@ def _browse_pak_level(rel_path):
         label = _label_folder(rel_path, fname)
         child = f"{rel_path}/{fname}" if rel_path else fname
         result.append({"type": "folder", "name": fname, "label": label, "rel_path": child})
+    for name_lower in sorted(files):
+        name     = files[name_lower]
+        ft       = _classify_file(name)
+        if ft not in LISTED_FILE_TYPES:        # hide meshes/curves/blueprints/vfx/etc.
+            continue
+        gr       = f"{rel_path}/{name}" if rel_path else name   # storage-relative game_rel
+        is_mat   = ft == "material"
+        base     = os.path.join(IMPORT_ROOT, *gr.split("/"))
+        imported = os.path.exists(base + (".json" if is_mat else ".png"))
+        result.append({
+            "type":      "asset",
+            "file_type": ft,
+            "name":      name,
+            "label":     name,
+            "rel_path":  gr,
+            "game_rel":  gr,
+            "imported":  imported,
+            "token":     token(gr) if imported else None,
+        })
     return result
 
 def _browse_skin(skin_id, subpath):
@@ -189,8 +216,10 @@ def _browse_skin(skin_id, subpath):
         result.append({"type": "folder", "name": name, "label": name, "rel_path": folders[name]})
     for name in sorted(files, key=str.lower):
         td     = files[name]
-        base   = os.path.join(IMPORT_ROOT, *td["game_rel"].split("/"))
         ft     = _classify_file(name)
+        if ft not in LISTED_FILE_TYPES:        # hide meshes/curves/blueprints/vfx/etc.
+            continue
+        base   = os.path.join(IMPORT_ROOT, *td["game_rel"].split("/"))
         is_mat = ft == "material"
         imported = os.path.exists(base + (".json" if is_mat else ".png"))
         tok      = token(td["game_rel"]) if imported else None

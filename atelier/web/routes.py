@@ -561,6 +561,20 @@ def api_open_explorer():
     response.content_type = "application/json"
     return json.dumps({"ok": True})
 
+
+@app.get("/api/open_with")
+def api_open_with():
+    path = request.query.get("path", "")
+    gr   = request.query.get("game_rel", "")
+    if gr:
+        path = _import_base(gr) + ".png"
+    if path:
+        abs_path = os.path.abspath(path)
+        if os.path.exists(abs_path):
+            subprocess.Popen(["rundll32.exe", "shell32.dll,OpenAs_RunDLL", abs_path])
+    response.content_type = "application/json"
+    return json.dumps({"ok": True})
+
 # ── export ────────────────────────────────────────────────────────────────────
 
 @app.post("/api/export")

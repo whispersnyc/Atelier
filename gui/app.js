@@ -325,7 +325,7 @@ function handleImportedFileAction(item) {
       openMaterialEditor(item);
       return;
     default:
-      fetch(`/api/open_explorer?game_rel=${encodeURIComponent(item.game_rel)}`);
+      fetch(`/api/open_with?game_rel=${encodeURIComponent(item.game_rel)}`);
   }
 }
 
@@ -337,9 +337,9 @@ function handleAssetClick(item) {
   const ft   = item.file_type || "other";
   const kind = ft.charAt(0).toUpperCase() + ft.slice(1);
   const sid  = skinIdFromPath(nav.path);
-  document.getElementById("confirm-title").textContent = `Import ${kind}?`;
+  document.getElementById("confirm-title").textContent = `Edit ${kind}?`;
   document.getElementById("confirm-msg").textContent =
-    `Import ${ft} "${item.name}"${sid ? ` from skin ${sid}` : ""}?`;
+    `Edit ${ft} "${item.name}"${sid ? ` from skin ${sid}` : ""}?`;
   pendingImport = { skin_id: sid, rel_path: item.rel_path, game_rel: item.game_rel, name: item.name, file_type: ft };
   document.getElementById("confirm-overlay").classList.add("active");
 }
@@ -354,8 +354,8 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
   if (!pendingImport) return;
   const item = pendingImport; pendingImport = null;
   suppressedImportGameRels.add(item.game_rel);
-  const loadingToast = toastSpinner(`Importing ${item.name}…`);
-  setStatus(`Importing ${item.name}…`);
+  const loadingToast = toastSpinner(`Editing ${item.name}…`);
+  setStatus(`Editing ${item.name}…`);
   try {
     let res;
     if (item.file_type === "material") {
@@ -371,7 +371,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
     loadingToast.remove();
     suppressedImportGameRels.delete(item.game_rel);
     if (res.ok) {
-      toast(`Imported: ${item.name}`, "success");
+      toast(`Edited: ${item.name}`, "success");
       setStatus("");
       refreshSidebarEntry(item.game_rel, item.name, item.skin_id);
       const gridArea   = document.getElementById("grid-area");
@@ -381,7 +381,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
       const importedItem = allItems.find(i => i.game_rel === item.game_rel) || item;
       handleImportedFileAction(importedItem);
     } else {
-      toast(`Import failed: ${res.error}`, "warning");
+      toast(`Edit failed: ${res.error}`, "warning");
       setStatus("");
     }
   } catch (e) {
@@ -531,12 +531,12 @@ document.getElementById("import-all-btn").addEventListener("click", () => {
   const shown   = _shownTextures();
   const pending = shown.filter(i => !i.imported);
   const q       = document.getElementById("search-input").value.trim();
-  if (!pending.length) { toast(q ? "All shown textures already imported" : "All textures already imported", "success"); return; }
+  if (!pending.length) { toast(q ? "All shown textures already edited" : "All textures already edited", "success"); return; }
   const sid = skinIdFromPath(nav.path);
   pendingImportAll = pending;
   document.getElementById("confirm-all-msg").textContent =
     `Extract and decode ${pending.length} texture${pending.length !== 1 ? "s" : ""}`
-    + (pending.length < shown.length ? ` (${shown.length - pending.length} already imported)` : "")
+    + (pending.length < shown.length ? ` (${shown.length - pending.length} already edited)` : "")
     + (q ? ` matching "${q}"` : "")
     + (sid ? ` from "${sid}"` : "") + "?";
   document.getElementById("confirm-all-overlay").classList.add("active");
@@ -572,7 +572,7 @@ document.getElementById("confirm-all-ok").addEventListener("click", async () => 
   if (!res.ok) {
     document.getElementById("prog-overlay").classList.remove("active");
     importing = false;
-    toast(`Import failed: ${res.error}`, "warning");
+    toast(`Edit failed: ${res.error}`, "warning");
   }
 });
 
@@ -584,7 +584,7 @@ function showProgress(current, total) {
 window.addEventListener("beforeunload", e => {
   if (importing) {
     e.preventDefault();
-    e.returnValue = "An import is in progress. Closing may leave assets incomplete.";
+    e.returnValue = "An edit is in progress. Closing may leave assets incomplete.";
     return e.returnValue;
   }
 });
@@ -635,9 +635,9 @@ function handleSSE(d) {
     suppressChangeToastUntil = Date.now() + 2500;
     document.getElementById("prog-overlay").classList.remove("active");
     if (d.error) {
-      toast(`Import failed: ${d.error}`, "warning", 8000);
+      toast(`Edit failed: ${d.error}`, "warning", 8000);
     } else {
-      toast(`Imported ${d.current} texture${d.current !== 1 ? "s" : ""}`, "success");
+      toast(`Edited ${d.current} texture${d.current !== 1 ? "s" : ""}`, "success");
     }
     setStatus("");
     loadSidebar();
@@ -679,7 +679,7 @@ function renderSidebar() {
   list.innerHTML = "";
   const all = Object.values(sidebarData);
   if (!all.length) {
-    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No assets imported yet.</div>';
+    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No edited assets yet.</div>';
     updateExportBtn();
     return;
   }
@@ -689,7 +689,7 @@ function renderSidebar() {
         (i.skin_name || "").toLowerCase().includes(q) ||
         (i.char_name || "").toLowerCase().includes(q)) : all;
   if (!items.length) {
-    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No staged assets match the search.</div>';
+    list.innerHTML = '<div style="padding:20px 14px;font-size:12px;color:var(--muted)">No edited assets match the search.</div>';
     updateExportBtn();
     return;
   }
@@ -811,9 +811,9 @@ document.getElementById("confirm-clear-ok").addEventListener("click", async () =
 
 document.getElementById("clear-all-btn").addEventListener("click", () => {
   const count = Object.keys(sidebarData).length;
-  if (!count) { toast("No imported assets to clear", "info"); return; }
+  if (!count) { toast("No edited assets to clear", "info"); return; }
   document.getElementById("confirm-clear-all-msg").textContent =
-    `All ${count} imported asset${count !== 1 ? "s" : ""} will be permanently deleted from local assets.`;
+    `All ${count} edited asset${count !== 1 ? "s" : ""} will be permanently deleted from local assets.`;
   document.getElementById("confirm-clear-all-overlay").classList.add("active");
 });
 
@@ -832,7 +832,7 @@ document.getElementById("confirm-clear-all-ok").addEventListener("click", async 
     if (res.ok) {
       sidebarData = {};
       renderSidebar();
-      toast(`Deleted ${res.deleted} imported asset${res.deleted !== 1 ? "s" : ""}`, "warning", 4000);
+      toast(`Deleted ${res.deleted} edited asset${res.deleted !== 1 ? "s" : ""}`, "warning", 4000);
       renderGrid().catch(() => {});
     } else {
       toast(`Delete failed: ${res.error}`, "warning");

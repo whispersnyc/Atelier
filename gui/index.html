@@ -36,7 +36,7 @@
     <div id="bottombar">
       <button class="btn primary" id="import-all-btn" disabled>
         <i data-lucide="download-cloud" size="15"></i>
-        Import All
+        Edit All
       </button>
       <span id="status-msg"></span>
     </div>
@@ -50,9 +50,9 @@
     <div id="sidebar-header">
       <div style="display:flex;align-items:center;gap:6px">
         <i data-lucide="package" size="13"></i>
-        Export Staging
+        Edited Assets
       </div>
-      <button class="clear-all-btn" id="clear-all-btn" title="Delete all imported assets">Clear All</button>
+      <button class="clear-all-btn" id="clear-all-btn" title="Delete all edited assets">Clear All</button>
     </div>
     <div id="sidebar-list"></div>
     <div id="sidebar-footer">
@@ -69,11 +69,11 @@
 <!-- ── confirm: single import ── -->
 <div class="overlay" id="confirm-overlay">
   <div class="modal">
-    <h2><i data-lucide="download" size="18" style="color:var(--acc)"></i> <span id="confirm-title">Import Asset?</span></h2>
-    <p id="confirm-msg">Extract this asset to your local assets folder?</p>
+    <h2><i data-lucide="download" size="18" style="color:var(--acc)"></i> <span id="confirm-title">Edit Asset?</span></h2>
+    <p id="confirm-msg">Edit this asset in your local assets folder?</p>
     <div class="modal-row">
       <button class="btn" id="confirm-cancel">Cancel</button>
-      <button class="btn primary" id="confirm-ok">Import</button>
+      <button class="btn primary" id="confirm-ok">Edit</button>
     </div>
   </div>
 </div>
@@ -81,17 +81,17 @@
 <!-- ── confirm: import all ── -->
 <div class="overlay" id="confirm-all-overlay">
   <div class="modal">
-    <h2><i data-lucide="download-cloud" size="18" style="color:var(--acc)"></i> Import All Textures?</h2>
+    <h2><i data-lucide="download-cloud" size="18" style="color:var(--acc)"></i> Edit All Textures?</h2>
     <p id="confirm-all-msg">This will extract and decode all listed textures.</p>
     <div class="warning">
       <i data-lucide="alert-triangle" size="14" style="flex-shrink:0;margin-top:2px"></i>
-      <span>This may take a while. Do not close the browser tab while importing.</span>
+      <span>This may take a while. Do not close the browser tab while editing.</span>
     </div>
     <div class="modal-row">
       <button class="btn" id="confirm-all-cancel">Cancel</button>
       <button class="btn primary" id="confirm-all-ok">
         <i data-lucide="download-cloud" size="14"></i>
-        Start Import
+        Start Editing
       </button>
     </div>
   </div>
@@ -101,7 +101,7 @@
 <div class="overlay" id="confirm-clear-overlay">
   <div class="modal">
     <h2><i data-lucide="trash-2" size="18" style="color:var(--acc)"></i> <span id="confirm-clear-title">Delete Asset?</span></h2>
-    <p id="confirm-clear-msg">Delete this imported asset from local assets?</p>
+    <p id="confirm-clear-msg">Delete this edited asset from local assets?</p>
     <div class="modal-row">
       <button class="btn" id="confirm-clear-cancel">Cancel</button>
       <button class="btn primary" id="confirm-clear-ok">Delete</button>
@@ -112,11 +112,11 @@
 <!-- ── confirm: clear all ── -->
 <div class="overlay" id="confirm-clear-all-overlay">
   <div class="modal">
-    <h2><i data-lucide="trash-2" size="18" style="color:var(--acc)"></i> Delete All Imported?</h2>
-    <p id="confirm-clear-all-msg">All imported assets will be permanently deleted from local assets.</p>
+    <h2><i data-lucide="trash-2" size="18" style="color:var(--acc)"></i> Delete All Edited?</h2>
+    <p id="confirm-clear-all-msg">All edited assets will be permanently deleted from local assets.</p>
     <div class="warning">
       <i data-lucide="alert-triangle" size="14" style="flex-shrink:0;margin-top:2px"></i>
-      <span>This cannot be undone. You will need to re-import assets to use them again.</span>
+      <span>This cannot be undone. You will need to re-edit assets to use them again.</span>
     </div>
     <div class="modal-row">
       <button class="btn" id="confirm-clear-all-cancel">Cancel</button>
@@ -131,11 +131,11 @@
 <!-- ── progress overlay (un-closable) ── -->
 <div class="overlay" id="prog-overlay">
   <div id="prog-box">
-    <h2><div class="spinner"></div> Importing Assets…</h2>
+    <h2><div class="spinner"></div> Editing Assets…</h2>
     <div id="prog-counter" style="font-size:13px;color:var(--muted)">Downloading 0 / 0 assets…</div>
     <div class="warning" style="margin-top:4px">
       <i data-lucide="shield-alert" size="14" style="flex-shrink:0;margin-top:2px"></i>
-      <span>Import in progress — closing this tab may leave assets in an incomplete state.</span>
+      <span>Edit in progress — closing this tab may leave assets in an incomplete state.</span>
     </div>
   </div>
 </div>

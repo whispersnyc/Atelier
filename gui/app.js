@@ -334,10 +334,6 @@ function handleAssetClick(item) {
     handleImportedFileAction(item);
     return;
   }
-  if ((item.file_type || "") === "material") {
-    openMaterialEditor(item);
-    return;
-  }
   const ft   = item.file_type || "other";
   const kind = ft.charAt(0).toUpperCase() + ft.slice(1);
   const sid  = skinIdFromPath(nav.path);
@@ -361,18 +357,29 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
   const loadingToast = toastSpinner(`Importing ${item.name}…`);
   setStatus(`Importing ${item.name}…`);
   try {
-    const res = await api(handlerFor(item.file_type).import_endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ skin_id: item.skin_id, rel_path: item.rel_path, game_rel: item.game_rel }),
-    });
+    let res;
+    if (item.file_type === "material") {
+      // materials: api_material_params triggers mat_json (extraction) for any game_rel path
+      res = await api(`/api/material_params?game_rel=${encodeURIComponent(item.game_rel)}`);
+    } else {
+      res = await api(handlerFor(item.file_type).import_endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skin_id: item.skin_id, rel_path: item.rel_path, game_rel: item.game_rel }),
+      });
+    }
     loadingToast.remove();
     suppressedImportGameRels.delete(item.game_rel);
     if (res.ok) {
       toast(`Imported: ${item.name}`, "success");
       setStatus("");
       refreshSidebarEntry(item.game_rel, item.name, item.skin_id);
-      renderGrid().catch(() => {});
+      const gridArea   = document.getElementById("grid-area");
+      const savedScroll = gridArea.scrollTop;
+      await renderGrid();
+      gridArea.scrollTop = savedScroll;
+      const importedItem = allItems.find(i => i.game_rel === item.game_rel) || item;
+      handleImportedFileAction(importedItem);
     } else {
       toast(`Import failed: ${res.error}`, "warning");
       setStatus("");
@@ -478,11 +485,9 @@ async function saveMaterial() {
       body: JSON.stringify({ game_rel: matEditor.game_rel, colors, scalars }),
     });
     if (res.ok) {
-      const name = matEditor.name;
-      closeMaterialEditor();
-      toast(`Saved: ${name}`, "success");
+      document.getElementById("mat-status").textContent = "Saved — staged for export.";
+      toast(`Saved: ${matEditor.name}`, "success");
       loadSidebar();
-      renderGrid().catch(() => {});
     } else {
       document.getElementById("mat-status").textContent = "Error: " + (res.error || "save failed");
     }
@@ -636,7 +641,9 @@ function handleSSE(d) {
     }
     setStatus("");
     loadSidebar();
-    renderGrid().catch(() => {});
+    const gridArea   = document.getElementById("grid-area");
+    const savedScroll = gridArea.scrollTop;
+    renderGrid().then(() => { gridArea.scrollTop = savedScroll; }).catch(() => {});
   }
 }
 

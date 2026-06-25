@@ -1,6 +1,7 @@
-import os, json
-from atelier.config import ASSETS, PAKS, USMAP, _WORK
+import os, json, shutil
+from atelier.config import ASSETS, IMPORT_ROOT, PAKS, USMAP, _WORK
 from atelier.tools import uat
+from atelier.paths import pak_game_path
 
 def is_material(path_or_name):
     return os.path.basename(path_or_name).upper().startswith("MI_")
@@ -59,13 +60,20 @@ def _apply_mat_edits(d, colors, scalars):
             if pv is not None: pv["Value"] = float(scalars[nm])
 
 def mat_json(game_rel):
-    """Extract the MI + convert to JSON (cached at assets/<game_rel>.json). Returns the json path."""
-    base = os.path.join(ASSETS, *game_rel.split("/"))
+    """Extract the MI + convert to JSON (cached at IMPORT_ROOT/<game_rel>.json). Returns the json path."""
+    base = os.path.join(IMPORT_ROOT, *game_rel.split("/"))
     jp   = base + ".json"
     if os.path.exists(jp): return jp
     if not os.path.exists(base + ".uasset"):
+        pak_gr   = pak_game_path(game_rel)
+        pak_base = os.path.join(ASSETS, *pak_gr.split("/"))
         uat(["extract_iostore_legacy", PAKS, os.path.abspath(ASSETS),
-             "--filter", os.path.basename(game_rel)])
+             "--filter", os.path.basename(pak_gr)])
+        os.makedirs(os.path.dirname(base), exist_ok=True)
+        for ext in (".uasset", ".uexp", ".ubulk"):
+            src = pak_base + ext
+            if os.path.exists(src):
+                shutil.move(src, base + ext)
     if not os.path.exists(base + ".uasset"):
         raise RuntimeError("material not found in game paks")
     uat(["to_json", os.path.abspath(base + ".uasset"), USMAP,
@@ -78,12 +86,28 @@ def read_material(game_rel):
     colors, scalars = _mat_params(json.load(open(mat_json(game_rel), encoding="utf-8-sig")))
     return {"colors": colors, "scalars": scalars}
 
+def save_material(game_rel, colors, scalars):
+    """Apply color/scalar edits and PERSIST them into the material's on-disk JSON."""
+    jp = mat_json(game_rel)
+    d  = json.load(open(jp, encoding="utf-8-sig"))
+    _apply_mat_edits(d, colors or {}, scalars or {})
+    json.dump(d, open(jp, "w"))
+    cols, scals = _mat_params(d)
+    return {"colors": cols, "scalars": scals}
+
+def reset_material(game_rel):
+    """Drop local edits: delete the cached JSON and re-derive vanilla params from the .uasset."""
+    jp = os.path.join(IMPORT_ROOT, *game_rel.split("/")) + ".json"
+    if os.path.exists(jp): os.remove(jp)
+    return read_material(game_rel)
+
 def stage_material(stage, game_rel, colors, scalars):
-    """Apply color/scalar edits to the MI and from_json it into the export stage."""
+    """Apply color/scalar edits to the MI and from_json it into the export stage at pak game path."""
     d = json.load(open(mat_json(game_rel), encoding="utf-8-sig"))
     _apply_mat_edits(d, colors or {}, scalars or {})
     ej = os.path.join(_WORK, "_mat_edit.json"); json.dump(d, open(ej, "w"))
-    out_ua = os.path.join(stage, *game_rel.split("/")) + ".uasset"
+    pak_gr = pak_game_path(game_rel)
+    out_ua = os.path.join(stage, *pak_gr.split("/")) + ".uasset"
     os.makedirs(os.path.dirname(out_ua), exist_ok=True)
     uat(["from_json", os.path.abspath(ej), os.path.abspath(out_ua), USMAP])
     if not os.path.exists(out_ua): raise RuntimeError("from_json produced no uasset")

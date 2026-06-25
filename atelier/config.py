@@ -32,6 +32,7 @@ USMAP   = next((u for u in _usmaps if "_latest" not in os.path.basename(u).lower
 CNW     = 0x08000000 if os.name == "nt" else 0
 
 ASSETS      = os.path.join(ROOT, "assets")
+IMPORT_ROOT = os.path.join(ROOT, "assets", "import")
 ASSETS_MODS = os.path.join(ROOT, "assets", "mods")
 _WORK       = os.path.join(ROOT, "_work")
 GUI_DIR     = os.path.join(getattr(sys, "_MEIPASS", ROOT), "gui")

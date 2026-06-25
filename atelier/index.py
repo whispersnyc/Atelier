@@ -4,9 +4,10 @@ import io_lib
 
 _INDEX      = None
 _CACHE_FILE = os.path.join(_WORK, "cli_index_cache.json")
+_CACHE_VER  = "v2"  # bump to invalidate cached indexes
 
 def _utoc_key():
-    parts = []
+    parts = [_CACHE_VER]
     for f in sorted(glob.glob(PAKS + "/*.utoc")):
         s = os.stat(f)
         parts.append(f"{os.path.basename(f)}:{s.st_size}:{int(s.st_mtime)}")
@@ -32,7 +33,7 @@ def ensure_index():
             print(f"  [warn] {os.path.basename(utoc)}: {e}", file=sys.stderr); continue
         cont = os.path.basename(utoc)
         for p, _ in ents:
-            if "Marvel/Content/Marvel/Characters/" in p and p.lower().endswith(".uasset"):
+            if "Marvel/Content/Marvel/" in p and p.lower().endswith(".uasset"):
                 _INDEX.append((p, cont))
     os.makedirs(_WORK, exist_ok=True)
     json.dump({"key": key, "entries": _INDEX}, open(_CACHE_FILE, "w"))

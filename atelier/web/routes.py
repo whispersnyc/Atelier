@@ -1,14 +1,38 @@
-import os, sys, glob, json, threading, queue, subprocess
+import os, sys, glob, json, shutil, threading, queue, subprocess
 from bottle import request, response, static_file
 
 from atelier.web.app import app
-from atelier.config import ASSETS, ASSETS_MODS, PAKS, GUI_DIR, get_prereq_status
+from atelier.config import ASSETS, IMPORT_ROOT, ASSETS_MODS, PAKS, GUI_DIR, _WORK, get_prereq_status
+
+THUMBS_DIR = os.path.join(_WORK, "thumbs")
 from atelier.tools import uat
-from atelier.handlers.texture import decode_batch, stage_inject, build_mod
-from atelier.handlers.material import mat_json, is_material
-from atelier.paths import game_rel_for_skin
-from atelier.web.browse import (browse, all_char_ids, char_skin_ids, char_name, skin_name,
-                                token, game_rel_from_token, all_imported)
+from atelier.handlers.texture import decode_batch, stage_inject, build_mod, decode_thumb
+from atelier.handlers.material import mat_json, is_material, read_material, save_material, reset_material
+from atelier.handlers.vfx import read_vfx, is_vfx
+from atelier.paths import game_rel_for_skin, pak_game_path
+from atelier.web.browse import (browse_dispatch, token, game_rel_from_token, all_imported)
+
+# ── extraction helpers ────────────────────────────────────────────────────────
+
+def _import_base(game_rel):
+    """Full disk path (no ext) for a game_rel in the import structure."""
+    return os.path.join(IMPORT_ROOT, *game_rel.split("/"))
+
+def _pak_extract_base(game_rel):
+    """Where extract_iostore_legacy puts the file (under ASSETS at pak game path)."""
+    return os.path.join(ASSETS, *pak_game_path(game_rel).split("/"))
+
+def _relocate_to_import(game_rel):
+    """Move .uasset/.uexp/.ubulk from pak extraction location to import structure."""
+    src_base = _pak_extract_base(game_rel)
+    dst_base = _import_base(game_rel)
+    if src_base == dst_base:
+        return
+    os.makedirs(os.path.dirname(dst_base), exist_ok=True)
+    for ext in (".uasset", ".uexp", ".ubulk"):
+        src = src_base + ext
+        if os.path.exists(src):
+            shutil.move(src, dst_base + ext)
 
 # ── static ────────────────────────────────────────────────────────────────────
 
@@ -27,45 +51,13 @@ def api_prereqs():
     response.content_type = "application/json"
     return json.dumps(get_prereq_status())
 
-# ── characters ────────────────────────────────────────────────────────────────
-
-@app.get("/api/characters")
-def api_characters():
-    try:
-        char_ids = all_char_ids()
-    except Exception as e:
-        response.content_type = "application/json"
-        return json.dumps({"error": str(e)})
-    out = []
-    for cid in char_ids:
-        skins = char_skin_ids(cid)
-        out.append({"char_id": cid, "name": char_name(cid), "skin_count": len(skins)})
-    response.content_type = "application/json"
-    return json.dumps(out)
-
-# ── skins ─────────────────────────────────────────────────────────────────────
-
-@app.get("/api/skins")
-def api_skins():
-    cid      = request.query.get("char_id", "")
-    skin_ids = char_skin_ids(cid)
-    out      = []
-    for sid in skin_ids:
-        suffix = sid[-3:]
-        name   = skin_name(sid)
-        label  = f"{suffix} - Default" if name == sid else f"{suffix} - {name}"
-        out.append({"skin_id": sid, "name": name, "label": label})
-    response.content_type = "application/json"
-    return json.dumps(out)
-
-# ── browse ────────────────────────────────────────────────────────────────────
+# ── browse (unified) ──────────────────────────────────────────────────────────
 
 @app.get("/api/browse")
 def api_browse():
-    skin_id = request.query.get("skin_id", "")
-    subpath = request.query.get("path", "")
+    path = request.query.get("path", "")
     try:
-        items = browse(skin_id, subpath)
+        items = browse_dispatch(path)
     except Exception as e:
         response.content_type = "application/json"
         return json.dumps({"error": str(e)})
@@ -78,7 +70,7 @@ def api_browse():
 def api_preview():
     gr = request.query.get("game_rel", "")
     if gr:
-        png = os.path.join(ASSETS, *gr.split("/")) + ".png"
+        png = _import_base(gr) + ".png"
         if os.path.exists(png):
             response.content_type = "image/png"
             with open(png, "rb") as f: return f.read()
@@ -86,12 +78,80 @@ def api_preview():
     if tok:
         gr = game_rel_from_token(tok)
         if gr:
-            png = os.path.join(ASSETS, *gr.split("/")) + ".png"
+            png = _import_base(gr) + ".png"
             if os.path.exists(png):
                 response.content_type = "image/png"
                 with open(png, "rb") as f: return f.read()
     response.status = 404
     return b""
+
+# ── thumbnail (low-mip preview, no import required) ──────────────────────────
+
+@app.get("/api/thumb")
+def api_thumb():
+    game_rel = request.query.get("game_rel", "")
+    if not game_rel:
+        response.status = 404; return b""
+    thumb    = os.path.join(THUMBS_DIR, *game_rel.split("/")) + ".png"
+    full_png = _import_base(game_rel) + ".png"
+    if os.path.exists(thumb):
+        response.content_type = "image/png"
+        with open(thumb, "rb") as f: return f.read()
+    if os.path.exists(full_png):
+        response.content_type = "image/png"
+        with open(full_png, "rb") as f: return f.read()
+    response.status = 404
+    return b""
+
+_prefetch_gen      = 0
+_prefetch_gen_lock = threading.Lock()
+
+@app.post("/api/prefetch_thumbs")
+def api_prefetch_thumbs():
+    global _prefetch_gen
+    body = request.json or {}
+    game_rels = [gr for gr in body.get("game_rels", []) if gr]
+    if not game_rels:
+        response.content_type = "application/json"
+        return json.dumps({"ok": True, "cached": [], "count": 0})
+
+    with _prefetch_gen_lock:
+        _prefetch_gen += 1
+        my_gen = _prefetch_gen
+
+    cached, pending = [], []
+    for gr in game_rels:
+        thumb    = os.path.join(THUMBS_DIR, *gr.split("/")) + ".png"
+        full_png = _import_base(gr) + ".png"
+        if os.path.exists(thumb) or os.path.exists(full_png):
+            cached.append(gr)
+        else:
+            pending.append(gr)
+
+    def _run():
+        if not pending: return
+        # Extract assets that aren't already in the import tree
+        to_extract = [gr for gr in pending
+                      if not os.path.exists(_import_base(gr) + ".uasset")]
+        if to_extract:
+            names = list({os.path.basename(pak_game_path(gr)) for gr in to_extract})
+            uat(["extract_iostore_legacy", PAKS, os.path.abspath(ASSETS), "--filter"] + names)
+            for gr in to_extract:
+                _relocate_to_import(gr)
+        for gr in pending:
+            with _prefetch_gen_lock:
+                if _prefetch_gen != my_gen:
+                    return
+            uasset = _import_base(gr) + ".uasset"
+            thumb  = os.path.join(THUMBS_DIR, *gr.split("/")) + ".png"
+            if os.path.exists(uasset) and not os.path.exists(thumb):
+                decode_thumb(uasset, thumb)
+            if os.path.exists(thumb):
+                _push_sse({"thumb_ready": True, "game_rel": gr})
+
+    threading.Thread(target=_run, daemon=True).start()
+    response.content_type = "application/json"
+    return json.dumps({"ok": True, "cached": cached, "count": len(pending)})
 
 # ── imported list ─────────────────────────────────────────────────────────────
 
@@ -112,10 +172,11 @@ def api_import_texture():
         return json.dumps({"ok": False, "error": "missing skin_id or rel_path"})
     try:
         gr       = game_rel_for_skin(skin_id, rel)
-        dst_base = os.path.join(ASSETS, *gr.split("/"))
+        dst_base = _import_base(gr)
         os.makedirs(os.path.dirname(dst_base), exist_ok=True)
         uat(["extract_iostore_legacy", PAKS, os.path.abspath(ASSETS),
-             "--filter", os.path.basename(gr)])
+             "--filter", os.path.basename(pak_game_path(gr))])
+        _relocate_to_import(gr)
         decode_batch([dst_base + ".uasset"])
         png_exists = os.path.exists(dst_base + ".png")
         if not png_exists:
@@ -136,6 +197,22 @@ def api_import_vfx():
     response.content_type = "application/json"
     return json.dumps({"ok": False, "error": "VFX handler not yet implemented"})
 
+# ── vfx parameters (read: enumerate editable Niagara curves, classified) ──────
+
+@app.get("/api/vfx_params")
+def api_vfx_params():
+    gr = request.query.get("game_rel", "")
+    if not gr:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": "missing game_rel"})
+    try:
+        p = read_vfx(gr)
+        response.content_type = "application/json"
+        return json.dumps({"game_rel": gr, "token": token(gr), **p})
+    except Exception as e:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": str(e)})
+
 # ── material import ───────────────────────────────────────────────────────────
 
 @app.post("/api/import_material")
@@ -151,6 +228,52 @@ def api_import_material():
         mat_json(gr)
         response.content_type = "application/json"
         return json.dumps({"ok": True, "token": token(gr), "game_rel": gr})
+    except Exception as e:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": str(e)})
+
+# ── material parameters (read / save / reset) ────────────────────────────────
+
+@app.get("/api/material_params")
+def api_material_params():
+    gr = request.query.get("game_rel", "")
+    if not gr:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": "missing game_rel"})
+    try:
+        p = read_material(gr)
+        response.content_type = "application/json"
+        return json.dumps({"ok": True, "game_rel": gr, "token": token(gr), **p})
+    except Exception as e:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": str(e)})
+
+@app.post("/api/material_save")
+def api_material_save():
+    body = request.json or {}
+    gr   = body.get("game_rel", "")
+    if not gr:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": "missing game_rel"})
+    try:
+        p = save_material(gr, body.get("colors", {}), body.get("scalars", {}))
+        response.content_type = "application/json"
+        return json.dumps({"ok": True, "game_rel": gr, "token": token(gr), **p})
+    except Exception as e:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": str(e)})
+
+@app.post("/api/material_reset")
+def api_material_reset():
+    body = request.json or {}
+    gr   = body.get("game_rel", "")
+    if not gr:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": "missing game_rel"})
+    try:
+        p = reset_material(gr)
+        response.content_type = "application/json"
+        return json.dumps({"ok": True, "game_rel": gr, "token": token(gr), **p})
     except Exception as e:
         response.content_type = "application/json"
         return json.dumps({"ok": False, "error": str(e)})
@@ -176,17 +299,20 @@ def _run_import_job(items):
     with _job_lock:
         _job.update(running=True, current=0, total=len(items), name="", done=False, error=None, results=[])
     try:
-        names = sorted({os.path.basename(it["game_rel"]) for it in items})
+        names = sorted({os.path.basename(pak_game_path(it["game_rel"])) for it in items})
         _push_sse({"current": 0, "total": len(items), "name": "Extracting from game…", "done": False})
         uat(["extract_iostore_legacy", PAKS, os.path.abspath(ASSETS), "--filter"] + names)
 
+        for it in items:
+            _relocate_to_import(it["game_rel"])
+
         _push_sse({"current": 0, "total": len(items), "name": "Decoding…", "done": False})
-        uassets = [os.path.join(ASSETS, *it["game_rel"].split("/")) + ".uasset" for it in items]
+        uassets = [_import_base(it["game_rel"]) + ".uasset" for it in items]
         decode_batch([u for u in uassets if os.path.exists(u)])
 
         results = []; current = 0
         for it in items:
-            dst_base = os.path.join(ASSETS, *it["game_rel"].split("/"))
+            dst_base = _import_base(it["game_rel"])
             current += 1
             if os.path.exists(dst_base + ".png"):
                 results.append({"name": it["name"], "token": token(it["game_rel"]),
@@ -261,14 +387,14 @@ from watchdog.events import FileSystemEventHandler
 class _PNGHandler(FileSystemEventHandler):
     def on_modified(self, event):
         if not event.is_directory and event.src_path.endswith(".png"):
-            gr = os.path.relpath(event.src_path[:-4], ASSETS).replace("\\", "/")
+            gr = os.path.relpath(event.src_path[:-4], IMPORT_ROOT).replace("\\", "/")
             _push_sse({"file_changed": True, "token": token(gr), "game_rel": gr})
     def on_created(self, event):
         self.on_modified(event)
 
-os.makedirs(ASSETS, exist_ok=True)
+os.makedirs(IMPORT_ROOT, exist_ok=True)
 _observer = Observer()
-_observer.schedule(_PNGHandler(), ASSETS, recursive=True)
+_observer.schedule(_PNGHandler(), IMPORT_ROOT, recursive=True)
 _observer.start()
 
 # ── open in explorer ──────────────────────────────────────────────────────────
@@ -278,7 +404,7 @@ def api_open_explorer():
     path = request.query.get("path", "")
     gr   = request.query.get("game_rel", "")
     if gr:
-        path = os.path.join(ASSETS, *gr.split("/")) + ".png"
+        path = _import_base(gr) + ".png"
     if path:
         abs_path = os.path.abspath(path)
         if os.path.exists(abs_path):
@@ -325,7 +451,7 @@ def api_delete_imported():
     if not gr:
         response.content_type = "application/json"
         return json.dumps({"ok": False, "error": "missing game_rel"})
-    base = os.path.join(ASSETS, *gr.split("/"))
+    base = _import_base(gr)
     for ext in (".png", ".uasset", ".uexp", ".ubulk", ".json"):
         p = base + ext
         if os.path.exists(p):
@@ -338,7 +464,7 @@ def api_delete_imported():
 def api_delete_all_imported():
     items = all_imported()
     for item in items:
-        base = os.path.join(ASSETS, *item["game_rel"].split("/"))
+        base = _import_base(item["game_rel"])
         for ext in (".png", ".uasset", ".uexp", ".ubulk", ".json"):
             p = base + ext
             if os.path.exists(p):

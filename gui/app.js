@@ -4,24 +4,24 @@
 lucide.createIcons();
 
 // ── state ─────────────────────────────────────────────────────────────────────
-const NAV_ROOT    = { level: 0, char_id: null, skin_id: null, path: "" };
+const NAV_ROOT    = { path: "" };
 let   nav         = { ...NAV_ROOT };
 let   history     = [{ ...NAV_ROOT }];
 let   histIdx     = 0;
-let   allItems    = [];      // current grid items
+let   allItems    = [];      // current grid items (raw from server)
 let   sidebarData = {};      // token -> {name, game_rel, skin_id, char_name, skin_name, selected}
 let   importing   = false;
-let   pendingImport = null;  // {skin_id, rel_path, game_rel, name, card_el}
-let   pendingClear  = null;  // sidebar item to delete
-let   pendingImportAll = null;       // captured texture set for "Import All" (respects search filter)
-let   suppressChangeToastUntil = 0;  // swallow watcher "updated on disk" toasts during our own imports
+let   pendingImport = null;
+let   pendingClear  = null;
+let   pendingImportAll = null;
+let   suppressChangeToastUntil = 0;
+let   _pathLabels = {};      // "Characters/1234" -> "1234 — Spider-Man" (cached from browse results)
 
 // ── handler registry ──────────────────────────────────────────────────────────
-// Add a new entry here when a new asset type handler is implemented.
 const ASSET_HANDLERS = {
-  texture:  { import_endpoint: "/api/import_texture",  export_endpoint: "export_textures",  preview: true,  icon: "image"        },
-  material: { import_endpoint: "/api/import_material", export_endpoint: "export_materials", preview: false, icon: "circle-star"  },
-  vfx:      { import_endpoint: "/api/import_vfx",      export_endpoint: "export_vfx",      preview: false, icon: "sparkles"     },
+  texture:  { import_endpoint: "/api/import_texture",  preview: true,  icon: "image"        },
+  material: { import_endpoint: "/api/import_material", preview: false, icon: "circle-star"  },
+  vfx:      { import_endpoint: "/api/import_vfx",      preview: false, icon: "sparkles"     },
 };
 function handlerFor(ft) { return ASSET_HANDLERS[ft] || { import_endpoint: "/api/import", preview: false, icon: "file-question" }; }
 
@@ -76,6 +76,11 @@ function setStatus(msg) {
   document.getElementById("status-msg").textContent = msg;
 }
 
+function skinIdFromPath(path) {
+  const m = (path || "").match(/^Characters\/\d{4}\/(\d{7})/i);
+  return m ? m[1] : null;
+}
+
 // ── navigation ────────────────────────────────────────────────────────────────
 function pushNav(newNav) {
   history = history.slice(0, histIdx + 1);
@@ -116,9 +121,6 @@ document.getElementById("btn-forward").addEventListener("click", () => {
 });
 
 // ── breadcrumbs ───────────────────────────────────────────────────────────────
-let _charNameCache = {};
-let _skinLabelCache = {};
-
 function renderBreadcrumbs() {
   const bc = document.getElementById("breadcrumbs");
   bc.innerHTML = "";
@@ -137,115 +139,86 @@ function renderBreadcrumbs() {
     return el;
   };
 
-  bc.appendChild(crumb("All Characters", nav.level > 0 ? { level: 0, char_id: null, skin_id: null, path: "" } : null));
+  const parts = nav.path ? nav.path.split("/") : [];
+  bc.appendChild(crumb("Import", parts.length > 0 ? { path: "" } : null));
 
-  if (nav.level >= 1) {
-    const cname = _charNameCache[nav.char_id] || nav.char_id;
+  let accumulated = "";
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    accumulated = accumulated ? `${accumulated}/${part}` : part;
+    const isLast = i === parts.length - 1;
+    const label  = _pathLabels[accumulated] || part;
     bc.appendChild(sep());
-    bc.appendChild(crumb(`${nav.char_id} — ${cname}`,
-      nav.level > 1 ? { level: 1, char_id: nav.char_id, skin_id: null, path: "" } : null));
+    bc.appendChild(crumb(label, isLast ? null : { path: accumulated }));
   }
-  if (nav.level >= 2) {
-    const slabel = _skinLabelCache[nav.skin_id] || nav.skin_id;
-    bc.appendChild(sep());
-    bc.appendChild(crumb(slabel,
-      nav.level > 2 || nav.path ? { level: 2, char_id: nav.char_id, skin_id: nav.skin_id, path: "" } : null));
-  }
-  if (nav.level >= 2 && nav.path) {
-    const parts = nav.path.split("/");
-    parts.forEach((part, i) => {
-      bc.appendChild(sep());
-      const isLast = i === parts.length - 1;
-      const partPath = parts.slice(0, i + 1).join("/");
-      bc.appendChild(crumb(part,
-        isLast ? null : { level: 2, char_id: nav.char_id, skin_id: nav.skin_id, path: partPath }));
-    });
-  }
+
   lucide.createIcons({ nodes: [bc] });
 }
 
 // ── grid rendering ────────────────────────────────────────────────────────────
+function _makeCard(item) {
+  if (item.type === "folder") {
+    return {
+      type:    "folder",
+      label:   item.label || item.name,
+      iconCls: folderIconCls(item.name),
+      onClick: () => pushNav({ path: item.rel_path }),
+    };
+  }
+  const ft = item.file_type || "other";
+  return {
+    type:      "asset",
+    file_type: ft,
+    label:     item.name,
+    iconCls:   assetIconCls(ft),
+    imported:  item.imported,
+    token:     item.token,
+    game_rel:  item.game_rel,
+    rel_path:  item.rel_path,
+    onClick:   () => handleAssetClick(item),
+  };
+}
+
 async function renderGrid() {
   const area = document.getElementById("grid-area");
   area.innerHTML = '<div id="empty-state"><div class="spinner" style="margin:0 auto 12px"></div><div>Loading…</div></div>';
   document.getElementById("import-all-btn").disabled = true;
 
   try {
-    if (nav.level === 0) {
-      await renderCharacters();
-    } else if (nav.level === 1) {
-      await renderSkins();
-    } else {
-      await renderBrowse();
+    const data = await api(`/api/browse?path=${encodeURIComponent(nav.path || "")}`);
+    if (data.error) throw new Error(data.error);
+    allItems = data;
+
+    // Cache folder labels for breadcrumbs
+    for (const item of data) {
+      if (item.type === "folder" && item.label && item.label !== item.name) {
+        _pathLabels[item.rel_path] = item.label;
+      }
+    }
+
+    buildGrid(data.map(_makeCard));
+
+    const importable = data.filter(d => d.type === "asset" && d.file_type === "texture");
+    document.getElementById("import-all-btn").disabled = importable.length === 0;
+
+    const unimportedTextures = data.filter(d => d.type === "asset" && d.file_type === "texture" && !d.imported);
+    if (unimportedTextures.length) {
+      try {
+        const pf = await api("/api/prefetch_thumbs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ game_rels: unimportedTextures.map(t => t.game_rel) }),
+        });
+        (pf.cached || []).forEach(gr => {
+          document.querySelectorAll(`img[data-game-rel="${CSS.escape(gr)}"]`).forEach(img => {
+            img.src = `/api/thumb?game_rel=${encodeURIComponent(gr)}`;
+          });
+        });
+      } catch (_) {}
     }
   } catch (e) {
     area.innerHTML = `<div id="empty-state" style="color:var(--acc)">${e.message}</div>`;
   }
-}
-
-async function renderCharacters() {
-  const data = await api("/api/characters");
-  if (data.error) throw new Error(data.error);
-  allItems = data;
-  data.forEach(c => { _charNameCache[c.char_id] = c.name; });
-  buildGrid(data.map(c => ({
-    type:   "char",
-    id:     c.char_id,
-    label:  `${c.char_id} — ${c.name}`,
-    sub:    `${c.skin_count} skin${c.skin_count !== 1 ? "s" : ""}`,
-    icon:   "square-user-round",
-    iconCls:"char-icon",
-    onClick: () => pushNav({ level: 1, char_id: c.char_id, skin_id: null, path: "" }),
-  })));
-}
-
-async function renderSkins() {
-  const data = await api(`/api/skins?char_id=${encodeURIComponent(nav.char_id)}`);
-  if (data.error) throw new Error(data.error);
-  allItems = data;
-  data.forEach(s => { _skinLabelCache[s.skin_id] = s.label; });
-  buildGrid(data.map(s => ({
-    type:   "skin",
-    id:     s.skin_id,
-    label:  s.label,
-    icon:   "square-user-round",
-    iconCls:"char-icon",
-    onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: s.skin_id, path: "" }),
-  })));
-}
-
-async function renderBrowse() {
-  const url = `/api/browse?skin_id=${encodeURIComponent(nav.skin_id)}&path=${encodeURIComponent(nav.path || "")}`;
-  const data = await api(url);
-  if (data.error) throw new Error(data.error);
-  allItems = data;
-
-  const importable = data.filter(d => d.type === "asset" && d.file_type === "texture");
-  document.getElementById("import-all-btn").disabled = importable.length === 0;
-
-  buildGrid(data.map(item => {
-    if (item.type === "folder") {
-      return {
-        type:    "folder",
-        label:   item.name,
-        iconCls: folderIconCls(item.name),
-        onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: nav.skin_id,
-                                 path: item.rel_path }),
-      };
-    }
-    const ft = item.file_type || "other";
-    return {
-      type:      "asset",
-      file_type: ft,
-      label:     item.name,
-      iconCls:   assetIconCls(ft),
-      imported:  item.imported,
-      token:     item.token,
-      game_rel:  item.game_rel,
-      rel_path:  item.rel_path,
-      onClick:   () => handleAssetClick(item),
-    };
-  }));
 }
 
 function buildGrid(cards) {
@@ -274,13 +247,30 @@ function buildGrid(cards) {
     const thumb = document.createElement("div");
     thumb.className = "card-thumb";
 
-    if (card.type === "asset" && card.imported && card.token && handlerFor(card.file_type).preview) {
+    if (card.type === "asset" && handlerFor(card.file_type).preview && card.game_rel) {
       const img = document.createElement("img");
-      img.src = `/api/preview?token=${card.token}&game_rel=${encodeURIComponent(card.game_rel)}`;
+      img.dataset.gameRel = card.game_rel;
+      img.style.display = "none";
       img.alt = card.label;
-      img.onerror = () => { img.replaceWith(makeIcon(card)); };
+      if (card.imported) {
+        const icon = makeIcon(card);
+        thumb.appendChild(icon);
+        if (card.token) img.dataset.token = card.token;
+        img.src    = `/api/thumb?game_rel=${encodeURIComponent(card.game_rel)}`;
+        img.onload  = () => { img.style.display = ""; icon.style.display = "none"; };
+        img.onerror = () => { img.style.display = "none"; icon.style.display = ""; };
+      } else {
+        const spin = document.createElement("div");
+        spin.className = "spinner";
+        thumb.appendChild(spin);
+        img.onload  = () => { img.style.display = ""; spin.style.display = "none"; };
+        img.onerror = () => {
+          img.style.display = "none";
+          spin.replaceWith(makeIcon(card));
+          lucide.createIcons({ nodes: [thumb] });
+        };
+      }
       thumb.appendChild(img);
-      img.dataset.token = card.token;
     } else {
       thumb.appendChild(makeIcon(card));
     }
@@ -310,34 +300,8 @@ function makeIcon(card) {
 
 // ── search ────────────────────────────────────────────────────────────────────
 document.getElementById("search-input").addEventListener("input", () => {
-  if (nav.level === 0 && allItems.length) {
-    buildGrid(allItems.map(c => ({
-      type: "char", id: c.char_id,
-      label: `${c.char_id} — ${c.name}`,
-      sub: `${c.skin_count} skin${c.skin_count !== 1 ? "s" : ""}`,
-      icon: "square-user-round", iconCls: "char-icon",
-      onClick: () => pushNav({ level: 1, char_id: c.char_id, skin_id: null, path: "" }),
-    })));
-  } else if (nav.level === 1 && allItems.length) {
-    buildGrid(allItems.map(s => ({
-      type: "skin", id: s.skin_id, label: s.label,
-      icon: "square-user-round", iconCls: "char-icon",
-      onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: s.skin_id, path: "" }),
-    })));
-  } else if (nav.level >= 2 && allItems.length) {
-    buildGrid(allItems.map(item => {
-      if (item.type === "folder") {
-        return { type: "folder", label: item.name,
-          iconCls: folderIconCls(item.name),
-          onClick: () => pushNav({ level: 2, char_id: nav.char_id, skin_id: nav.skin_id, path: item.rel_path }) };
-      }
-      const ft = item.file_type || "other";
-      return { type: "asset", file_type: ft, label: item.name,
-        iconCls: assetIconCls(ft),
-        imported: item.imported, token: item.token,
-        game_rel: item.game_rel, rel_path: item.rel_path,
-        onClick: () => handleAssetClick(item) };
-    }));
+  if (allItems.length) {
+    buildGrid(allItems.map(_makeCard));
   }
   renderSidebar();
 });
@@ -347,7 +311,8 @@ function handleImportedFileAction(item) {
   const ft = item.file_type || "texture";
   switch (ft) {
     case "material":
-      return; // material parameter menu — to be implemented
+      openMaterialEditor(item);
+      return;
     default:
       fetch(`/api/open_explorer?game_rel=${encodeURIComponent(item.game_rel)}`);
   }
@@ -358,12 +323,17 @@ function handleAssetClick(item) {
     handleImportedFileAction(item);
     return;
   }
+  if ((item.file_type || "") === "material") {
+    openMaterialEditor(item);
+    return;
+  }
   const ft   = item.file_type || "other";
   const kind = ft.charAt(0).toUpperCase() + ft.slice(1);
+  const sid  = skinIdFromPath(nav.path);
   document.getElementById("confirm-title").textContent = `Import ${kind}?`;
   document.getElementById("confirm-msg").textContent =
-    `Import ${ft} "${item.name}" from skin ${nav.skin_id}?`;
-  pendingImport = { skin_id: nav.skin_id, rel_path: item.rel_path, game_rel: item.game_rel, name: item.name, file_type: ft };
+    `Import ${ft} "${item.name}"${sid ? ` from skin ${sid}` : ""}?`;
+  pendingImport = { skin_id: sid, rel_path: item.rel_path, game_rel: item.game_rel, name: item.name, file_type: ft };
   document.getElementById("confirm-overlay").classList.add("active");
 }
 
@@ -388,7 +358,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
       toast(`Imported: ${item.name}`, "success");
       setStatus("");
       refreshSidebarEntry(item.game_rel, item.name, item.skin_id);
-      renderBrowse().catch(() => {});
+      renderGrid().catch(() => {});
     } else {
       toast(`Import failed: ${res.error}`, "warning");
       setStatus("");
@@ -399,6 +369,134 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
   }
 });
 
+// ── material parameter editor ──────────────────────────────────────────────────
+let matEditor = null;
+
+function _hx2(c) { return ("0" + Math.round(Math.min(255, Math.max(0, c * 255))).toString(16)).slice(-2); }
+function _rgbHex(r, g, b, inten) { const n = Math.max(inten, 1e-6); return "#" + _hx2(r / n) + _hx2(g / n) + _hx2(b / n); }
+
+function _seedColors(arr) {
+  return (arr || []).map(c => ({ name: c.name, rgba: c.rgba.slice(),
+                                 inten: Math.max(c.rgba[0], c.rgba[1], c.rgba[2], 1) }));
+}
+function _seedScalars(arr) {
+  return (arr || []).map(s => ({ name: s.name, value: s.value, orig: s.value,
+                                 max: Math.max(Math.abs(s.value) * 3, 1) }));
+}
+
+async function openMaterialEditor(item) {
+  const ov = document.getElementById("material-overlay");
+  document.getElementById("mat-title").textContent = item.name;
+  document.getElementById("mat-sub").textContent = item.game_rel || "";
+  document.getElementById("mat-status").textContent = "";
+  document.getElementById("mat-body").innerHTML = '<div class="spinner" style="margin:44px auto"></div>';
+  ov.classList.add("active");
+  let res;
+  try { res = await api(`/api/material_params?game_rel=${encodeURIComponent(item.game_rel)}`); }
+  catch (e) { document.getElementById("mat-body").innerHTML = `<div class="mat-empty">Error: ${e.message}</div>`; return; }
+  if (!res.ok) { document.getElementById("mat-body").innerHTML = `<div class="mat-empty">${res.error || "failed to read material"}</div>`; return; }
+  matEditor = { game_rel: item.game_rel, name: item.name,
+                colors: _seedColors(res.colors), scalars: _seedScalars(res.scalars) };
+  renderMatEditor();
+  loadSidebar();
+}
+
+function renderMatEditor() {
+  const m = matEditor; if (!m) return;
+  let h = "";
+  if (m.colors.length) {
+    h += `<div class="mat-section">Colors</div>`;
+    m.colors.forEach((c, i) => {
+      h += `<div class="mat-row">
+        <label title="${c.name}">${c.name}</label>
+        <input type="color" value="${_rgbHex(c.rgba[0], c.rgba[1], c.rgba[2], c.inten)}" oninput="matColor(${i},this.value)">
+        <span class="mat-tag">intensity</span>
+        <input type="range" id="mir${i}" min="0" max="10" step="0.05" value="${Math.min(c.inten, 10)}" oninput="matInten(${i},this.value,1)">
+        <input class="mat-num" id="min${i}" type="number" step="0.05" value="${+c.inten.toFixed(3)}" oninput="matInten(${i},this.value,0)">
+        <span class="mat-tag">A</span>
+        <input class="mat-num" type="number" step="0.05" min="0" max="1" value="${+c.rgba[3].toFixed(3)}" oninput="matAlpha(${i},this.value)">
+      </div>`;
+    });
+  }
+  if (m.scalars.length) {
+    h += `<div class="mat-section">Scalars</div>`;
+    m.scalars.forEach((s, i) => {
+      h += `<div class="mat-row">
+        <label title="${s.name}">${s.name}</label>
+        <input type="range" id="msr${i}" min="${Math.min(0, s.orig)}" max="${s.max}" step="${s.max / 1000}" value="${s.value}" oninput="matScalar(${i},this.value,1)">
+        <input class="mat-num wide" id="msn${i}" type="number" step="any" value="${s.value}" oninput="matScalar(${i},this.value,0)">
+      </div>`;
+    });
+  }
+  if (!m.colors.length && !m.scalars.length)
+    h = `<div class="mat-empty">This material exposes no editable color or scalar parameters.</div>`;
+  document.getElementById("mat-body").innerHTML = h;
+}
+
+function matColor(i, hex) {
+  const c = matEditor.colors[i], n = Math.max(c.inten, 1e-6);
+  c.rgba[0] = parseInt(hex.substr(1, 2), 16) / 255 * n;
+  c.rgba[1] = parseInt(hex.substr(3, 2), 16) / 255 * n;
+  c.rgba[2] = parseInt(hex.substr(5, 2), 16) / 255 * n;
+}
+function matInten(i, v, fromRange) {
+  const c = matEditor.colors[i], o = Math.max(c.inten, 1e-6), nv = parseFloat(v) || 0;
+  c.rgba[0] = c.rgba[0] / o * nv; c.rgba[1] = c.rgba[1] / o * nv; c.rgba[2] = c.rgba[2] / o * nv; c.inten = nv;
+  const other = document.getElementById((fromRange ? "min" : "mir") + i); if (other) other.value = v;
+}
+function matAlpha(i, v) { matEditor.colors[i].rgba[3] = parseFloat(v) || 0; }
+function matScalar(i, v, fromRange) {
+  matEditor.scalars[i].value = parseFloat(v) || 0;
+  const other = document.getElementById((fromRange ? "msn" : "msr") + i); if (other) other.value = v;
+}
+
+async function saveMaterial() {
+  if (!matEditor) return;
+  const colors = {}, scalars = {};
+  matEditor.colors.forEach(c => { colors[c.name] = [c.rgba[0], c.rgba[1], c.rgba[2], c.rgba[3]]; });
+  matEditor.scalars.forEach(s => { scalars[s.name] = s.value; });
+  document.getElementById("mat-status").textContent = "Saving…";
+  try {
+    const res = await api("/api/material_save", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_rel: matEditor.game_rel, colors, scalars }),
+    });
+    if (res.ok) {
+      document.getElementById("mat-status").textContent = "Saved — staged for export.";
+      toast(`Saved: ${matEditor.name}`, "success");
+      loadSidebar();
+    } else {
+      document.getElementById("mat-status").textContent = "Error: " + (res.error || "save failed");
+    }
+  } catch (e) { document.getElementById("mat-status").textContent = "Error: " + e.message; }
+}
+
+async function resetMaterial() {
+  if (!matEditor) return;
+  document.getElementById("mat-status").textContent = "Resetting…";
+  try {
+    const res = await api("/api/material_reset", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_rel: matEditor.game_rel }),
+    });
+    if (res.ok) {
+      matEditor.colors = _seedColors(res.colors); matEditor.scalars = _seedScalars(res.scalars);
+      renderMatEditor();
+      document.getElementById("mat-status").textContent = "Reset to vanilla.";
+      toast(`Reset: ${matEditor.name}`, "info");
+    } else { document.getElementById("mat-status").textContent = "Error: " + (res.error || "reset failed"); }
+  } catch (e) { document.getElementById("mat-status").textContent = "Error: " + e.message; }
+}
+
+function closeMaterialEditor() { document.getElementById("material-overlay").classList.remove("active"); matEditor = null; }
+
+document.getElementById("mat-save").addEventListener("click", saveMaterial);
+document.getElementById("mat-reset").addEventListener("click", resetMaterial);
+document.getElementById("mat-close").addEventListener("click", closeMaterialEditor);
+document.getElementById("material-overlay").addEventListener("click", e => {
+  if (e.target.id === "material-overlay") closeMaterialEditor();
+});
+
 // ── import all ────────────────────────────────────────────────────────────────
 function _shownTextures() {
   const q = document.getElementById("search-input").value.trim().toLowerCase();
@@ -407,17 +505,17 @@ function _shownTextures() {
 }
 
 document.getElementById("import-all-btn").addEventListener("click", () => {
-  if (nav.level < 2) return;
   const shown   = _shownTextures();
   const pending = shown.filter(i => !i.imported);
   const q       = document.getElementById("search-input").value.trim();
   if (!pending.length) { toast(q ? "All shown textures already imported" : "All textures already imported", "success"); return; }
+  const sid = skinIdFromPath(nav.path);
   pendingImportAll = pending;
   document.getElementById("confirm-all-msg").textContent =
     `Extract and decode ${pending.length} texture${pending.length !== 1 ? "s" : ""}`
     + (pending.length < shown.length ? ` (${shown.length - pending.length} already imported)` : "")
     + (q ? ` matching "${q}"` : "")
-    + ` from "${nav.skin_id}"?`;
+    + (sid ? ` from "${sid}"` : "") + "?";
   document.getElementById("confirm-all-overlay").classList.add("active");
 });
 
@@ -431,8 +529,9 @@ document.getElementById("confirm-all-ok").addEventListener("click", async () => 
   pendingImportAll = null;
   if (!textures.length) return;
 
+  const sid   = skinIdFromPath(nav.path);
   const items = textures.map(t => ({
-    skin_id:  nav.skin_id,
+    skin_id:  sid,
     rel_path: t.rel_path,
     game_rel: t.game_rel,
     name:     t.name || t.label,
@@ -480,6 +579,13 @@ function connectSSE() {
 }
 
 function handleSSE(d) {
+  if (d.thumb_ready && d.game_rel) {
+    const sel = `img[data-game-rel="${CSS.escape(d.game_rel)}"]`;
+    document.querySelectorAll(sel).forEach(img => {
+      img.src = `/api/thumb?game_rel=${encodeURIComponent(d.game_rel)}&_t=${Date.now()}`;
+    });
+    return;
+  }
   if (d.file_changed) {
     const bust = `?token=${d.token}&gr=${encodeURIComponent(d.game_rel)}&t=${Date.now()}`;
     document.querySelectorAll(`img[data-token="${d.token}"]`).forEach(img => {
@@ -508,7 +614,7 @@ function handleSSE(d) {
     }
     setStatus("");
     loadSidebar();
-    if (nav.level >= 2) renderBrowse().catch(() => {});
+    renderGrid().catch(() => {});
   }
 }
 
@@ -573,7 +679,7 @@ function renderSidebar() {
       </div>
       <div class="sb-info">
         <div class="sb-name">${item.name}</div>
-        <div class="sb-sub">${item.char_name} / ${item.skin_name}</div>
+        <div class="sb-sub">${item.char_name || item.skin_id || ""} / ${item.skin_name || ""}</div>
       </div>
       <div class="sb-check">${item.selected ? '<i data-lucide="check" size="12"></i>' : ""}</div>
     `;
@@ -599,17 +705,25 @@ function updateExportBtn() {
   document.getElementById("export-btn").disabled = sel === 0;
 }
 
-async function export_textures(items, modName) {
-  const game_rels = items.map(i => i.game_rel);
-  setStatus(`Exporting ${game_rels.length} texture${game_rels.length !== 1 ? "s" : ""}…`);
+async function doExport() {
+  const selected = Object.values(sidebarData).filter(i => i.selected);
+  if (!selected.length) return;
+  const modName = document.getElementById("mod-name-input").value.trim() || "ModFilename";
+  const exportable = selected.filter(i => ["texture", "material"].includes(i.file_type || ""));
+  const skipped    = selected.length - exportable.length;
+  if (!exportable.length) {
+    toast("Nothing exportable selected — VFX export isn't implemented yet", "info");
+    return;
+  }
+  document.getElementById("export-btn").disabled = true;
+  setStatus(`Exporting ${exportable.length} asset${exportable.length !== 1 ? "s" : ""}…`);
   try {
     const res = await api("/api/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mod_name: modName, items: game_rels }),
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mod_name: modName, items: exportable.map(i => i.game_rel) }),
     });
     if (res.ok && res.pak_path) {
-      toast(`Exported: ${modName}_9999999_P.pak`, "success", 5000);
+      toast(`Exported: ${modName}_9999999_P.pak` + (skipped ? ` (${skipped} VFX/other skipped)` : ""), "success", 5000);
       setStatus(`Exported → ${res.pak_path}`);
       fetch(`/api/open_explorer?path=${encodeURIComponent(res.pak_path.replace(/\//g, "\\"))}`);
     } else {
@@ -617,38 +731,13 @@ async function export_textures(items, modName) {
       setStatus("");
     }
   } catch (e) {
-    toast(`Error: ${e.message}`, "warning");
-    setStatus("");
-  }
-}
-
-async function export_materials(items) {
-  toast(`${items.length} material${items.length !== 1 ? "s" : ""} skipped`, "info");
-}
-
-async function export_vfx(items) {
-  toast(`${items.length} VFX asset${items.length !== 1 ? "s" : ""} skipped`, "info");
-}
-
-document.getElementById("export-btn").addEventListener("click", async () => {
-  const selected = Object.values(sidebarData).filter(i => i.selected);
-  if (!selected.length) return;
-  const modName = document.getElementById("mod-name-input").value.trim() || "ModFilename";
-  document.getElementById("export-btn").disabled = true;
-  try {
-    const byType = {};
-    selected.forEach(i => { (byType[i.file_type || "other"] ??= []).push(i); });
-    for (const [ft, items] of Object.entries(byType)) {
-      const fn = ASSET_HANDLERS[ft]?.export_endpoint;
-      if      (fn === "export_textures")  await export_textures(items, modName);
-      else if (fn === "export_materials") await export_materials(items);
-      else if (fn === "export_vfx")       await export_vfx(items);
-      else toast(`${items.length} ${ft} asset${items.length !== 1 ? "s" : ""} skipped (no export handler)`, "info");
-    }
+    toast(`Error: ${e.message}`, "warning"); setStatus("");
   } finally {
     updateExportBtn();
   }
-});
+}
+
+document.getElementById("export-btn").addEventListener("click", doExport);
 
 // ── clear individual / clear all ──────────────────────────────────────────────
 function clearImported(token) {
@@ -682,7 +771,7 @@ document.getElementById("confirm-clear-ok").addEventListener("click", async () =
       delete sidebarData[item.token];
       renderSidebar();
       toast(`Deleted: ${item.name}`, "warning", 3000);
-      if (nav.level >= 2) renderBrowse().catch(() => {});
+      renderGrid().catch(() => {});
     } else {
       toast(`Delete failed: ${res.error}`, "warning");
     }
@@ -715,7 +804,7 @@ document.getElementById("confirm-clear-all-ok").addEventListener("click", async 
       sidebarData = {};
       renderSidebar();
       toast(`Deleted ${res.deleted} imported asset${res.deleted !== 1 ? "s" : ""}`, "warning", 4000);
-      if (nav.level >= 2) renderBrowse().catch(() => {});
+      renderGrid().catch(() => {});
     } else {
       toast(`Delete failed: ${res.error}`, "warning");
     }

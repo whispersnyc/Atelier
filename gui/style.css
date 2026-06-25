@@ -449,3 +449,31 @@ body {
   font-size: 13px;
 }
 #empty-state i { display: block; margin: 0 auto 12px; }
+
+/* ── material parameter editor ── */
+.mat-modal { max-width: 660px; width: calc(100% - 40px); max-height: 86vh;
+             padding: 0; gap: 0; overflow: hidden; }
+.mat-head { display: flex; align-items: flex-start; justify-content: space-between;
+            gap: 10px; padding: 18px 20px 12px; border-bottom: 1px solid var(--border); }
+.mat-head h2 { color: var(--text); }
+.mat-head h2 i { color: #70d022; }
+.mat-subpath { font-size: 11px; color: var(--muted); margin-top: 3px; word-break: break-all; }
+.mat-body { padding: 6px 20px 14px; overflow-y: auto; max-height: 62vh; }
+.mat-section { font-size: 11px; text-transform: uppercase; letter-spacing: .7px;
+               color: var(--muted); margin: 14px 0 4px; border-bottom: 1px solid var(--border);
+               padding-bottom: 4px; }
+.mat-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+.mat-row label { flex: 0 0 150px; font-size: 12px; color: var(--text);
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mat-row input[type=color] { width: 34px; height: 26px; padding: 1px; cursor: pointer;
+                 background: var(--bg3); border: 1px solid var(--border2); border-radius: 6px; }
+.mat-row input[type=range] { flex: 1; min-width: 50px; accent-color: #70d022; }
+.mat-tag { font-size: 10px; color: var(--muted); }
+.mat-num { width: 62px; background: var(--bg3); border: 1px solid var(--border);
+           border-radius: 6px; color: var(--text); font: inherit; font-size: 12px; padding: 4px 6px; }
+.mat-num.wide { width: 86px; }
+.mat-num:focus { outline: none; border-color: var(--blue); }
+.mat-empty { padding: 34px 10px; text-align: center; color: var(--muted); font-size: 13px; }
+.mat-foot { display: flex; align-items: center; gap: 10px; padding: 12px 20px;
+            border-top: 1px solid var(--border); background: var(--bg2); }
+.mat-status { flex: 1; font-size: 12px; color: var(--muted); }

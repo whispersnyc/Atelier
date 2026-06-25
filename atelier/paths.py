@@ -1,6 +1,8 @@
 import re
 from atelier.index import ensure_index
 
+PAK_GAME_PREFIX = "Marvel/Content/Marvel"
+
 def char_id(skin_id): return skin_id[:4]
 
 def skin_needle(skin_id):
@@ -21,9 +23,13 @@ def pak_rel(pak_path):
     return r[:-7] if r.lower().endswith(".uasset") else r
 
 def game_rel_for_skin(skin_id, tex_rel):
-    """Build the game-relative path from a skin_id shorthand + tex_rel."""
+    """Storage-relative path for a skin asset: Characters/{cid}/{skin_id}/{tex_rel}"""
     cid = char_id(skin_id)
-    return f"Marvel/Content/Marvel/Characters/{cid}/{skin_id}/{tex_rel}"
+    return f"Characters/{cid}/{skin_id}/{tex_rel}"
+
+def pak_game_path(game_rel):
+    """Prefix a storage-relative game_rel with Marvel/Content/Marvel/ for pak operations."""
+    return f"{PAK_GAME_PREFIX}/{game_rel}"
 
 def skin_entries(skin_id):
     needle = skin_needle(skin_id)

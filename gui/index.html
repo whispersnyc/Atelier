@@ -159,6 +159,24 @@
 <!-- ── toast area ── -->
 <div id="toast-area"></div>
 
+<!-- ── first-run: game path setup ── -->
+<div class="overlay" id="setup-overlay">
+  <div class="modal">
+    <h2><i data-lucide="folder-open" size="18" style="color:var(--acc)"></i> Set Game Location</h2>
+    <p>Point Atelier to your Marvel Rivals <strong style="color:var(--text)">Paks</strong> folder to get started.</p>
+    <div class="setup-row">
+      <input id="setup-path" type="text" class="setup-input" placeholder="…/MarvelGame/Marvel/Content/Paks" spellcheck="false">
+      <button class="btn" id="setup-browse"><i data-lucide="folder" size="14"></i> Browse…</button>
+    </div>
+    <div class="modal-row">
+      <button class="btn primary" id="setup-save">
+        <i data-lucide="check" size="14"></i>
+        Save & Continue
+      </button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

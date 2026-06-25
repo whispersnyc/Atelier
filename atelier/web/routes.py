@@ -2,7 +2,8 @@ import os, sys, glob, json, shutil, threading, queue, subprocess
 from bottle import request, response, static_file
 
 from atelier.web.app import app
-from atelier.config import ASSETS, IMPORT_ROOT, ASSETS_MODS, PAKS, GUI_DIR, _WORK, get_prereq_status
+from atelier.config import (ASSETS, IMPORT_ROOT, ASSETS_MODS, PAKS, GUI_DIR, _WORK,
+                            get_prereq_status, CONFIG_HAS_PAKS, paks_suggestion, save_paks_config)
 
 THUMBS_DIR = os.path.join(_WORK, "thumbs")
 from atelier.tools import uat
@@ -51,6 +52,62 @@ def static(path):
 def api_prereqs():
     response.content_type = "application/json"
     return json.dumps(get_prereq_status())
+
+# ── first-run setup ───────────────────────────────────────────────────────────
+
+@app.get("/api/setup_status")
+def api_setup_status():
+    response.content_type = "application/json"
+    return json.dumps({
+        "configured": CONFIG_HAS_PAKS,
+        "suggestion": "" if CONFIG_HAS_PAKS else paks_suggestion(),
+    })
+
+@app.post("/api/pick_folder")
+def api_pick_folder():
+    body    = request.json or {}
+    initial = (body.get("initial") or "").replace("/", "\\")
+    env     = os.environ.copy()
+    env["PAKS_INITIAL"] = initial
+    ps = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+        "$f.Description = 'Select the Marvel Rivals Paks folder'; "
+        "$f.SelectedPath = $env:PAKS_INITIAL; "
+        "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }"
+    )
+    try:
+        r    = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                              capture_output=True, text=True, timeout=120, env=env)
+        path = r.stdout.strip().replace("\\", "/")
+        response.content_type = "application/json"
+        return json.dumps({"ok": True, "path": path})
+    except Exception as e:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "path": "", "error": str(e)})
+
+@app.post("/api/save_paks")
+def api_save_paks():
+    body = request.json or {}
+    path = body.get("path", "").strip()
+    if not path:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": "no path provided"})
+    try:
+        save_paks_config(path)
+        def _restart():
+            import time; time.sleep(0.4)
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable])
+            else:
+                subprocess.Popen([sys.executable] + sys.argv)
+            os._exit(0)
+        threading.Thread(target=_restart, daemon=True).start()
+        response.content_type = "application/json"
+        return json.dumps({"ok": True})
+    except Exception as e:
+        response.content_type = "application/json"
+        return json.dumps({"ok": False, "error": str(e)})
 
 # ── browse (unified) ──────────────────────────────────────────────────────────
 

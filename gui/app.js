@@ -825,9 +825,65 @@ async function checkPrereqs() {
   } catch (e) {}
 }
 
+// ── first-run setup ───────────────────────────────────────────────────────────
+async function checkSetup() {
+  try {
+    const res = await api("/api/setup_status");
+    if (res.configured) return false;
+    document.getElementById("setup-path").value = res.suggestion || "";
+    document.getElementById("setup-overlay").classList.add("active");
+    return true;
+  } catch (e) { return false; }
+}
+
+document.getElementById("setup-browse").addEventListener("click", async () => {
+  const initial = document.getElementById("setup-path").value.trim();
+  const btn = document.getElementById("setup-browse");
+  btn.disabled = true;
+  try {
+    const res = await api("/api/pick_folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initial }),
+    });
+    if (res.ok && res.path) document.getElementById("setup-path").value = res.path;
+  } catch (e) {}
+  btn.disabled = false;
+});
+
+document.getElementById("setup-save").addEventListener("click", async () => {
+  const path = document.getElementById("setup-path").value.trim();
+  if (!path) { toast("Please enter a path", "warning"); return; }
+  const btn = document.getElementById("setup-save");
+  btn.disabled = true;
+  btn.innerHTML = "Saving…";
+  try {
+    const res = await api("/api/save_paks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (res.ok) {
+      btn.innerHTML = "Restarting…";
+      setTimeout(() => window.location.reload(), 1200);
+    } else {
+      toast(`Error: ${res.error}`, "warning");
+      btn.disabled = false;
+      btn.innerHTML = '<i data-lucide="check" size="14"></i> Save & Continue';
+      lucide.createIcons({ nodes: [btn] });
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, "warning");
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="check" size="14"></i> Save & Continue';
+    lucide.createIcons({ nodes: [btn] });
+  }
+});
+
 // ── initial load ──────────────────────────────────────────────────────────────
 async function init() {
   renderBreadcrumbs();
+  if (await checkSetup()) return;
   await checkPrereqs();
   await renderGrid();
   await loadSidebar();

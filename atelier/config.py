@@ -1,13 +1,14 @@
 import os, sys, glob, re, json
 
-ROOT = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
-        else os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT        = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
+               else os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CONFIG_FILE = os.path.join(ROOT, "mr_config.json")
 
 def _load_config():
-    try: return json.load(open(os.path.join(ROOT, "mr_config.json"), encoding="utf-8"))
+    try: return json.load(open(CONFIG_FILE, encoding="utf-8"))
     except Exception: return {}
 
-def _detect_paks():
+def _build_paks_candidates():
     cands = [r"C:/Program Files (x86)/Steam/steamapps/common/MarvelRivals/MarvelGame/Marvel/Content/Paks"]
     for vdf in (r"C:/Program Files (x86)/Steam/steamapps/libraryfolders.vdf",
                 r"C:/Program Files/Steam/steamapps/libraryfolders.vdf"):
@@ -17,11 +18,30 @@ def _detect_paks():
                 lib = m.group(1).replace("\\\\", "/").replace("\\", "/")
                 cands.append(lib + "/steamapps/common/MarvelRivals/MarvelGame/Marvel/Content/Paks")
         except Exception: pass
+    return cands
+
+def _detect_paks():
+    cands = _build_paks_candidates()
     for c in cands:
         if os.path.isdir(c) and glob.glob(c + "/pakchunk*.utoc"): return c
     return cands[0]
 
-_cfg  = _load_config()
+def paks_suggestion():
+    """Return the auto-detected valid paks path, or empty string if not found."""
+    for c in _build_paks_candidates():
+        if os.path.isdir(c) and glob.glob(c + "/pakchunk*.utoc"):
+            return c
+    return ""
+
+def save_paks_config(paks_path):
+    cfg = {}
+    try: cfg = json.load(open(CONFIG_FILE, encoding="utf-8"))
+    except Exception: pass
+    cfg["paks"] = paks_path.replace("\\", "/")
+    json.dump(cfg, open(CONFIG_FILE, "w", encoding="utf-8"), indent=2)
+
+_cfg            = _load_config()
+CONFIG_HAS_PAKS = bool(_cfg.get("paks"))
 TOOLS = _cfg.get("tools") or os.path.join(ROOT, "Tools")
 PAKS  = (_cfg.get("paks") or _detect_paks()).replace("\\", "/")
 os.environ["MR_TOOLS"] = TOOLS  # must be set before io_lib is imported anywhere

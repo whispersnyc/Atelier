@@ -8,7 +8,7 @@ _CACHE_VER  = "v2"  # bump to invalidate cached indexes
 
 def _utoc_key():
     parts = [_CACHE_VER]
-    for f in sorted(glob.glob(PAKS + "/*.utoc")):
+    for f in sorted(glob.glob(PAKS + "/pakchunkCharacter-Windows*.utoc")):
         s = os.stat(f)
         parts.append(f"{os.path.basename(f)}:{s.st_size}:{int(s.st_mtime)}")
     return "|".join(parts)
@@ -22,7 +22,7 @@ def ensure_index():
         if c.get("key") == key:
             _INDEX = [tuple(e) for e in c["entries"]]; return _INDEX
     except Exception: pass
-    utocs = sorted(glob.glob(PAKS + "/*.utoc"))
+    utocs = sorted(glob.glob(PAKS + "/pakchunkCharacter-Windows*.utoc"))
     print(f"  Indexing {len(utocs)} pak containers (first run, cached after)...", file=sys.stderr)
     _INDEX = []
     for utoc in utocs:

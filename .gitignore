@@ -223,6 +223,7 @@ __marimo__/
 Tools/
 extracted/
 _work/
+_logs/
 assets/
 mr_config.json
 _cache/

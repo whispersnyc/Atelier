@@ -1,8 +1,4 @@
-### critical
-Logging system
-
 ### regular
-focus on start
 on initial import of asset, should start toggled on in sidebar
 confirm message before export files override files with same name
 fix the duplicate toast from watchdog on file edit

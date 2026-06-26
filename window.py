@@ -5,6 +5,7 @@ import threading
 import urllib.request
 import os
 import datetime
+import subprocess
 import webview
 
 PORT = 8767
@@ -12,6 +13,33 @@ URL  = f"http://localhost:{PORT}"
 
 _ROOT = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
          else os.path.dirname(os.path.abspath(__file__)))
+
+
+def _show_launch_toast():
+    try:
+        with open(os.path.join(_ROOT, "version"), "r") as f:
+            version = f.read().strip()
+    except Exception:
+        version = ""
+    label = f"Atelier {version}" if version else "Atelier"
+    xml = (
+        f'<toast duration="short"><visual><binding template="ToastText02">'
+        f'<text id="1">{label}</text>'
+        f'<text id="2">Launching, please wait...</text>'
+        f'</binding></visual></toast>'
+    )
+    ps = (
+        "[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]|Out-Null;"
+        "[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom,ContentType=WindowsRuntime]|Out-Null;"
+        f"$x=[Windows.Data.Xml.Dom.XmlDocument]::new();"
+        f"$x.LoadXml('{xml}');"
+        f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{label}').Show("
+        f"[Windows.UI.Notifications.ToastNotification]::new($x))"
+    )
+    subprocess.Popen(
+        ["powershell", "-WindowStyle", "Hidden", "-NoProfile", "-Command", ps],
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
 
 
 def _setup_logging():
@@ -64,6 +92,7 @@ def _run_server():
 
 
 def main():
+    _show_launch_toast()
     _setup_logging()
 
     t = threading.Thread(target=_run_server, daemon=True)

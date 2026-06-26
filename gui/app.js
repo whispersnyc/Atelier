@@ -1235,10 +1235,74 @@ async function checkUsmapUpdate() {
   try { await api("/api/usmap_update_check"); } catch (_) {}
 }
 
+// ── update check ──────────────────────────────────────────────────────────────
+function _fmtMB(bytes) {
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+function _showUpdatePanel(id) {
+  ["update-checking", "update-confirm", "update-downloading", "update-error"].forEach(p => {
+    document.getElementById(p).style.display = p === id ? "flex" : "none";
+  });
+}
+
+async function checkUpdate() {
+  const overlay = document.getElementById("update-overlay");
+  overlay.classList.add("active");
+  _showUpdatePanel("update-checking");
+
+  let info;
+  try { info = await api("/api/update_check"); }
+  catch { overlay.classList.remove("active"); return false; }
+
+  if (!info.available) { overlay.classList.remove("active"); return false; }
+
+  document.getElementById("update-tag").textContent = info.tag;
+  _showUpdatePanel("update-confirm");
+  lucide.createIcons();
+
+  return new Promise(resolve => {
+    const dismiss = () => { overlay.classList.remove("active"); resolve(false); };
+    document.getElementById("update-later").onclick = dismiss;
+    const skipVerBtn = document.getElementById("update-skip-ver");
+    if (skipVerBtn) skipVerBtn.onclick = async () => {
+      try { await api("/api/update_skip", { method: "POST" }); } catch {}
+      dismiss();
+    };
+    document.getElementById("update-now").onclick = async () => {
+      _showUpdatePanel("update-downloading");
+      const fill  = document.getElementById("update-dl-fill");
+      const label = document.getElementById("update-dl-label");
+      try { await api("/api/update_download", { method: "POST" }); }
+      catch { _showUpdatePanel("update-error"); return; }
+      const poll = setInterval(async () => {
+        let s, p;
+        try {
+          [s, p] = await Promise.all([api("/api/update_status"), api("/api/update_progress")]);
+        } catch { clearInterval(poll); return; }
+        if (p.total > 0) {
+          fill.style.width = p.pct + "%";
+          label.textContent = `${_fmtMB(p.bytes)} / ${_fmtMB(p.total)}  (${p.pct}%)`;
+        }
+        if (s.state === "error") {
+          clearInterval(poll);
+          _showUpdatePanel("update-error");
+          document.getElementById("update-error-ok").onclick = () => { overlay.classList.remove("active"); resolve(false); };
+        }
+      }, 300);
+    };
+    document.getElementById("update-error-ok").onclick = () => {
+      overlay.classList.remove("active");
+      resolve(false);
+    };
+  });
+}
+
 // ── initial load ──────────────────────────────────────────────────────────────
 async function init() {
   console.log("[init] starting");
   renderBreadcrumbs();
+  if (await checkUpdate()) { console.log("[init] update in progress"); return; }
   if (await checkSetup()) { console.log("[init] halted for setup"); return; }
   await checkPrereqs();
   await renderGrid();

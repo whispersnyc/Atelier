@@ -1,8 +1,8 @@
-import os, sys, glob, json, re, shutil, threading, queue, subprocess, time, urllib.request
+import os, sys, glob, json, re, shutil, threading, queue, subprocess, tempfile, time, urllib.request
 from bottle import request, response, static_file
 
 from atelier.web.app import app
-from atelier.config import (ASSETS, IMPORT_ROOT, WORK_IMPORT_ROOT, ASSETS_MODS, PAKS, GUI_DIR, _CACHE,
+from atelier.config import (ROOT, ASSETS, IMPORT_ROOT, WORK_IMPORT_ROOT, ASSETS_MODS, PAKS, GUI_DIR, _CACHE,
                             get_prereq_status, CONFIG_HAS_PAKS, paks_suggestion, save_paks_config,
                             save_setup_config, save_usmap_config, get_usmap_checked_at, save_usmap_checked_at)
 
@@ -258,6 +258,153 @@ def api_open_discord_key():
     except Exception: pass
     response.content_type = "application/json"
     return json.dumps({"ok": True})
+
+# ── auto-update ───────────────────────────────────────────────────────────────
+
+_update_cache      = None   # {"tag": str, "download_url": str} set by update_check
+_update_state      = "idle" # idle | downloading | error
+_update_state_lock = threading.Lock()
+_update_progress   = {"pct": 0, "bytes": 0, "total": 0}
+
+
+@app.get("/api/update_check")
+def api_update_check():
+    global _update_cache
+    response.content_type = "application/json"
+
+    version_path = os.path.join(ROOT, "version")
+    try:
+        with open(version_path, "r") as f:
+            current = tuple(int(x) for x in f.read().strip().split("."))
+        print(f"[update] current version: {current}")
+    except Exception as e:
+        print(f"[update] failed to read version: {e}")
+        return json.dumps({"available": False})
+
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/clownfetus/Atelier/releases?per_page=1",
+            headers={"User-Agent": "Atelier-Updater"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            releases = json.loads(r.read().decode())
+        if not releases:
+            return json.dumps({"available": False})
+        data = releases[0]
+    except Exception as e:
+        print(f"[update] GitHub request failed: {e}")
+        return json.dumps({"available": False})
+
+    tag = data.get("tag_name", "")
+    try:
+        remote = tuple(int(x) for x in tag.lstrip("v").split("."))
+    except Exception:
+        return json.dumps({"available": False})
+
+    if remote <= current:
+        print(f"[update] up to date ({current} >= {remote})")
+        return json.dumps({"available": False})
+
+    try:
+        with open(os.path.join(ROOT, "mr_config.json"), encoding="utf-8") as f:
+            _cfg_skip = json.load(f)
+        if _cfg_skip.get("skipped_update") == tag:
+            print(f"[update] {tag} was skipped by user")
+            return json.dumps({"available": False})
+    except Exception:
+        pass
+
+    download_url = None
+    for asset in data.get("assets", []):
+        if asset["name"] == "AtelierSetup.exe":
+            download_url = asset["browser_download_url"]
+            break
+    if not download_url:
+        print("[update] AtelierSetup.exe not found in release assets")
+        return json.dumps({"available": False})
+
+    _update_cache = {"tag": tag, "download_url": download_url}
+    print(f"[update] update available: {current} -> {remote}")
+    return json.dumps({"available": True, "tag": tag})
+
+
+@app.post("/api/update_skip")
+def api_update_skip():
+    response.content_type = "application/json"
+    if not _update_cache:
+        return json.dumps({"ok": False})
+    tag = _update_cache["tag"]
+    cfg_path = os.path.join(ROOT, "mr_config.json")
+    cfg = {}
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        pass
+    cfg["skipped_update"] = tag
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"[update] skipped version {tag}")
+    return json.dumps({"ok": True})
+
+
+@app.post("/api/update_download")
+def api_update_download():
+    global _update_state
+    response.content_type = "application/json"
+    if not _update_cache:
+        return json.dumps({"ok": False, "error": "no update info cached"})
+    with _update_state_lock:
+        if _update_state == "downloading":
+            return json.dumps({"ok": True})
+        _update_state = "downloading"
+    threading.Thread(target=_do_update_download, args=(_update_cache["download_url"],), daemon=True).start()
+    return json.dumps({"ok": True})
+
+
+@app.get("/api/update_status")
+def api_update_status():
+    response.content_type = "application/json"
+    return json.dumps({"state": _update_state})
+
+
+@app.get("/api/update_progress")
+def api_update_progress():
+    response.content_type = "application/json"
+    return json.dumps(_update_progress)
+
+
+def _do_update_download(download_url):
+    global _update_state, _update_progress
+    tmp_path = os.path.join(tempfile.gettempdir(), "AtelierSetup.exe")
+
+    def _reporthook(block_num, block_size, total_size):
+        global _update_progress
+        if total_size > 0:
+            downloaded = min(block_num * block_size, total_size)
+            _update_progress = {
+                "pct":   int(downloaded * 100 / total_size),
+                "bytes": downloaded,
+                "total": total_size,
+            }
+
+    try:
+        print(f"[update] downloading to {tmp_path}...")
+        urllib.request.urlretrieve(download_url, tmp_path, reporthook=_reporthook)
+        print("[update] download complete, launching installer...")
+    except Exception as e:
+        print(f"[update] download failed: {e}")
+        with _update_state_lock:
+            _update_state = "error"
+        return
+    subprocess.Popen(
+        [tmp_path, "/SILENT"],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
+    print("[update] installer launched, exiting...")
+    os._exit(0)
+
 
 # ── USMAP management ──────────────────────────────────────────────────────────
 

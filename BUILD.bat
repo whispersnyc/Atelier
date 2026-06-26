@@ -1,7 +1,8 @@
 @echo off
 timeout 3
-set /p VERSION=Version (e.g. 0.0.3):
+set /p VERSION=Version (e.g. 0.1.3):
 if "%VERSION%"=="" (echo Version cannot be empty & exit /b 1)
+echo %VERSION%> version
 rmdir /s /q build dist 2>nul
 python -m PyInstaller --noconfirm --clean Atelier.spec
 if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%

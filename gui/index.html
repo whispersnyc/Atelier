@@ -162,6 +162,45 @@
 <!-- ── toast area ── -->
 <div id="toast-area"></div>
 
+<!-- ── update check / download ── -->
+<div class="overlay" id="update-overlay">
+  <div class="modal" id="update-modal">
+    <div id="update-checking" style="display:flex;align-items:center;gap:10px">
+      <div class="spinner" style="flex-shrink:0"></div>
+      <span style="font-size:13px;color:var(--muted)">Checking for updates&hellip;</span>
+    </div>
+    <div id="update-confirm" style="display:none;flex-direction:column;gap:14px">
+      <h2><i data-lucide="arrow-up-circle" size="18" style="color:var(--acc)"></i> Update Available</h2>
+      <p>Atelier <strong id="update-tag" style="color:var(--text)"></strong> is ready to install.</p>
+      <div class="modal-row">
+        <button class="btn" id="update-later">Later</button>
+        <!---<button class="btn" id="update-skip-ver">Skip Version</button>--->
+        <button class="btn primary" id="update-now">
+          <i data-lucide="download" size="14"></i>
+          Update Now
+        </button>
+      </div>
+    </div>
+    <div id="update-downloading" style="display:none;flex-direction:column;gap:14px">
+      <h2 style="font-size:15px;display:flex;align-items:center;gap:8px">
+        <div class="spinner" style="flex-shrink:0"></div>
+        Downloading Update&hellip;
+      </h2>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="update-dl-fill" style="width:0%"></div>
+      </div>
+      <div id="update-dl-label" style="font-size:12px;color:var(--muted)">Starting&hellip;</div>
+    </div>
+    <div id="update-error" style="display:none;flex-direction:column;gap:14px">
+      <h2><i data-lucide="alert-triangle" size="18" style="color:var(--yellow)"></i> Update Failed</h2>
+      <p>Could not download the update. Check your connection and try again.</p>
+      <div class="modal-row">
+        <button class="btn primary" id="update-error-ok">Continue</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── first-run: game path setup ── -->
 <div class="overlay" id="setup-overlay">
   <div class="modal">

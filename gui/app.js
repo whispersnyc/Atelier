@@ -81,7 +81,10 @@ function toast(msg, type = "info", duration = 3200) {
   el.innerHTML = `<i data-lucide="${icon}" size="14"></i><span>${msg}</span>`;
   document.getElementById("toast-area").appendChild(el);
   lucide.createIcons({ nodes: [el] });
-  setTimeout(() => el.remove(), duration);
+  let remaining = duration, start = Date.now(), t = setTimeout(() => el.remove(), duration);
+  el.addEventListener("mouseenter", () => { clearTimeout(t); remaining -= Date.now() - start; });
+  el.addEventListener("mouseleave", () => { start = Date.now(); t = setTimeout(() => el.remove(), remaining); });
+  el.addEventListener("click", () => { clearTimeout(t); el.remove(); });
 }
 
 function setStatus(msg) {

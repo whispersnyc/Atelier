@@ -7,7 +7,10 @@ _CACHE_FILE = os.path.join(_CACHE, "cli_index_cache.json")
 _CACHE_VER  = "v5"  # bump to invalidate cached indexes
 
 def _index_utocs():
-    # Case-insensitive ascending sort: alphabetically later filename = higher priority (overrides earlier).
+    # Ascending ASCII/Unicode order (case-insensitive via .lower()): digits (0-9) before letters (a-z),
+    # '-' (45) before '_' (95).  Base paks (pakchunkFoo-Windows) therefore sort before patch paks
+    # (pakchunkFoo_patch_YYYYMMDD-Windows), and patch paks sort chronologically within themselves.
+    # Later entries in this list override earlier ones for the same virtual path (see ensure_index).
     return sorted(glob.glob(PAKS + "/*.utoc"), key=lambda p: os.path.basename(p).lower())
 
 def _utoc_key():

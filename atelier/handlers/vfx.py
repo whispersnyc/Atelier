@@ -19,13 +19,13 @@ def is_vfx(path_or_name):
     return nl.startswith(("ns_", "fx_", "vfx_", "nfx_", "p_", "niagara_"))
 
 def _ensure_extracted(game_rel):
-    from atelier.handlers.texture import find_extracted
+    from atelier.handlers.texture import extract_output_base, find_extracted
     work_base = os.path.join(WORK_IMPORT_ROOT, *game_rel.split("/"))
     if not os.path.exists(work_base + ".uasset"):
         pak_gr   = pak_game_path(game_rel)
         uat(["extract_iostore_legacy", PAKS, os.path.abspath(ASSETS), "--filter", os.path.basename(pak_gr)])
-        src_base = os.path.join(ASSETS, *pak_gr.split("/"))
-        if not os.path.exists(src_base + ".uasset"):
+        src_base = extract_output_base(game_rel)
+        if not src_base or not os.path.exists(src_base + ".uasset"):
             src_base = find_extracted(game_rel)
         if src_base:
             os.makedirs(os.path.dirname(work_base), exist_ok=True)

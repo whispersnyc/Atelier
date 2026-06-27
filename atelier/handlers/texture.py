@@ -32,10 +32,20 @@ def decode_thumb(uasset_path, thumb_path):
             return True
     return False
 
+def extract_output_base(game_rel):
+    """Return the exact path (no ext) where UAssetTool drops the extracted file.
+    Derived from the index virtual path, which already encodes the pak mount-point prefix.
+    Returns None if the asset isn't in the index."""
+    from atelier.index import ensure_index
+    suf = game_rel.lower() + ".uasset"
+    for full_path, _ in ensure_index():
+        if full_path.lower().endswith(suf):
+            return os.path.join(ASSETS, *full_path[:-7].split("/"))
+    return None
+
 def find_extracted(game_rel):
-    """Walk ASSETS for a .uasset whose path ends with the game_rel suffix.
-    UAssetTool uses different output prefixes per pak container (e.g. Marvel/Content/Marvel/
-    for pakchunkCharacter vs ent/Marvel/ for patch paks), so we match by suffix instead."""
+    """Fallback: walk ASSETS for a .uasset whose path ends with the game_rel suffix.
+    Used when the asset is absent from the index (stale cache, mid-update, etc.)."""
     suf = os.path.join(*game_rel.split("/")) + ".uasset"
     assets_abs = os.path.abspath(ASSETS)
     for dirpath, _, files in os.walk(assets_abs):

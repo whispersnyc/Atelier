@@ -4,10 +4,11 @@ import io_lib
 
 _INDEX      = None
 _CACHE_FILE = os.path.join(_CACHE, "cli_index_cache.json")
-_CACHE_VER  = "v4"  # bump to invalidate cached indexes
+_CACHE_VER  = "v5"  # bump to invalidate cached indexes
 
 def _index_utocs():
-    return sorted(glob.glob(PAKS + "/*.utoc"))
+    # Case-insensitive ascending sort: alphabetically later filename = higher priority (overrides earlier).
+    return sorted(glob.glob(PAKS + "/*.utoc"), key=lambda p: os.path.basename(p).lower())
 
 def _utoc_key():
     parts = [_CACHE_VER]
@@ -27,7 +28,9 @@ def ensure_index():
     except Exception: pass
     utocs = _index_utocs()
     print(f"  Indexing {len(utocs)} pak containers (first run, cached after)...", file=sys.stderr)
-    _INDEX = []
+    # Dedup by virtual path (lower-cased): utocs processed ascending alphabetically so later entries
+    # (higher priority) overwrite earlier ones for the same virtual path.
+    seen = {}
     for utoc in utocs:
         try:
             t    = io_lib.parse_toc(utoc)
@@ -37,7 +40,8 @@ def ensure_index():
         cont = os.path.basename(utoc)
         for p, _ in ents:
             if "Marvel/Content/Marvel/" in p and p.lower().endswith(".uasset"):
-                _INDEX.append((p, cont))
+                seen[p.lower()] = (p, cont)
+    _INDEX = list(seen.values())
     os.makedirs(_CACHE, exist_ok=True)
     json.dump({"key": key, "entries": _INDEX}, open(_CACHE_FILE, "w"))
     return _INDEX

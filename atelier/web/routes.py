@@ -33,7 +33,7 @@ def _download_usmap_file(download_url, dest_path):
 
 THUMBS_DIR = os.path.join(_CACHE, "thumbs")
 from atelier.tools import uat
-from atelier.handlers.texture import decode_batch, stage_inject, build_mod, decode_thumb, find_extracted
+from atelier.handlers.texture import decode_batch, stage_inject, build_mod, decode_thumb, extract_output_base, find_extracted
 from atelier.handlers.pak_thumb import decode_thumb_from_pak
 import atelier.handlers.pak_thumb as _pak_thumb_mod
 import io_lib as _io_lib_mod
@@ -55,16 +55,12 @@ def _cache_import_base(game_rel):
     """Full disk path (no ext) for a game_rel in _cache/import (uasset/uexp/ubulk live here)."""
     return os.path.join(WORK_IMPORT_ROOT, *game_rel.split("/"))
 
-def _pak_extract_base(game_rel):
-    """Where extract_iostore_legacy puts the file (under ASSETS at pak game path)."""
-    return os.path.join(ASSETS, *pak_game_path(game_rel).split("/"))
-
 def _relocate_to_import(game_rel):
     """Move .uasset/.uexp/.ubulk from pak extraction location to _cache/import structure.
-    Falls back to searching ASSETS by path suffix when UAssetTool used a non-standard
-    output prefix (e.g. patch paks extract to ent/Marvel/ instead of Marvel/Content/Marvel/)."""
-    src_base = _pak_extract_base(game_rel)
-    if not os.path.exists(src_base + ".uasset"):
+    Uses the index to determine the exact extraction output path; falls back to ASSETS walk
+    if the asset isn't in the index (stale cache, etc.)."""
+    src_base = extract_output_base(game_rel)
+    if not src_base or not os.path.exists(src_base + ".uasset"):
         src_base = find_extracted(game_rel)
     if not src_base:
         return

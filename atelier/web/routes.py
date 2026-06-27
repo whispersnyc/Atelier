@@ -914,10 +914,17 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 class _PNGHandler(FileSystemEventHandler):
+    _last: dict = {}
+
     def on_modified(self, event):
         if not event.is_directory and event.src_path.endswith(".png"):
+            now = time.monotonic()
+            if now - self._last.get(event.src_path, 0) < 0.5:
+                return
+            self._last[event.src_path] = now
             gr = os.path.relpath(event.src_path[:-4], IMPORT_ROOT).replace("\\", "/")
             _push_sse({"file_changed": True, "token": token(gr), "game_rel": gr})
+
     def on_created(self, event):
         self.on_modified(event)
 

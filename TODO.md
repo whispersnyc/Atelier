@@ -1,11 +1,9 @@
 ### regular
+descriptive spinner text during initial (extra long loading for index)
 during the prefill stage of initial configuration when config file doesnt exist, create one with the prefilled contents, "" if no input prefilled
-UI thumbnail generation takes forever compared to character textures?
 replace on-boot toast with extremely fast lightweight splash screen
 toggle select/deselect all when clicking the sidebar's circled number
 confirmation before export files override files with same name
-fix the duplicate toast from watchdog on file edit
-supress toasts when existing imports loaded on boot
 sidebar: path under material/vfx items dont show anything, its just '/', show path truncated
 hovering over item in sidebar should show tooltip with pak name + full path
 use webview max compatibility gui method, ex leave undefined if better compat

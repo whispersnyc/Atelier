@@ -14,7 +14,7 @@ let   importing   = false;
 let   pendingImport = null;
 let   pendingClear  = null;
 let   pendingImportAll = null;
-let   suppressChangeToastUntil = 0;
+let   suppressChangeToastUntil = Date.now() + 5000;
 let   suppressedImportGameRels = new Set();
 let   _pathLabels = {};      // "Characters/1234" -> "1234 — Spider-Man" (cached from browse results)
 
@@ -384,8 +384,9 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
       });
     }
     loadingToast.remove();
-    suppressedImportGameRels.delete(item.game_rel);
     if (res.ok) {
+      suppressChangeToastUntil = Date.now() + 1500;
+      suppressedImportGameRels.delete(item.game_rel);
       toast(`Loaded: ${item.name}`, "success");
       setStatus("");
       refreshSidebarEntry(item.game_rel, item.name, item.skin_id);
@@ -396,6 +397,7 @@ document.getElementById("confirm-ok").addEventListener("click", async () => {
       const importedItem = allItems.find(i => i.game_rel === item.game_rel) || item;
       handleImportedFileAction(importedItem);
     } else {
+      suppressedImportGameRels.delete(item.game_rel);
       toast(`Edit failed: ${res.error}`, "warning");
       setStatus("");
     }
@@ -644,7 +646,7 @@ function handleSSE(d) {
       img.src = `/api/preview${bust}`;
     });
     if (!importing && !suppressedImportGameRels.has(d.game_rel) && Date.now() >= suppressChangeToastUntil) {
-      toast("Asset updated on disk — preview refreshed", "warning", 4000);
+      toast("Asset edited", "warning", 4000);
     }
     return;
   }
@@ -1172,12 +1174,15 @@ _ctxFileInput.addEventListener("change", async () => {
   const fd = new FormData();
   fd.append("file", file);
   fd.append("game_rel", game_rel);
+  suppressedImportGameRels.add(game_rel);
   const t = toastSpinner("Replacing…");
   try {
     const res  = await fetch("/api/replace_texture", { method: "POST", body: fd });
     const data = await res.json();
     t.remove();
     if (data.ok) {
+      suppressChangeToastUntil = Date.now() + 1500;
+      suppressedImportGameRels.delete(game_rel);
       toast("Texture replaced", "success");
       const bust = `&_t=${Date.now()}`;
       document.querySelectorAll(`img[data-game-rel="${CSS.escape(game_rel)}"]`).forEach(img => {
@@ -1189,10 +1194,12 @@ _ctxFileInput.addEventListener("change", async () => {
         });
       }
     } else {
+      suppressedImportGameRels.delete(game_rel);
       toast(`Replace failed: ${data.error}`, "warning");
     }
   } catch (err) {
     t.remove();
+    suppressedImportGameRels.delete(game_rel);
     toast(`Error: ${err.message}`, "warning");
   }
 });

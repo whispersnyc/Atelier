@@ -4,11 +4,12 @@ import os, io, struct, threading
 from collections import defaultdict
 from PIL import Image
 from atelier.config import PAKS
-from atelier.paths import PAK_GAME_PREFIX
 import io_lib
 
-_PREFIX_NEEDLE = PAK_GAME_PREFIX + "/"  # "Marvel/Content/Marvel/"
-_PREFIX_LEN    = len(_PREFIX_NEEDLE)
+_CONTENT_PREFIXES = (
+    "Marvel/Content/Marvel/",
+    "Marvel/Content/Marvel_LQ/",
+)
 
 _DXGI = {b"PF_DXT1": 71, b"PF_DXT5": 77, b"PF_BC5": 83, b"PF_BC7": 98}
 _BPB  = {b"PF_DXT1": 8,  b"PF_DXT5": 16, b"PF_BC5": 16, b"PF_BC7": 16}
@@ -24,12 +25,15 @@ _gr_map_lock  = threading.Lock()
 
 
 def _path_to_gr(pak_path: str) -> str | None:
+    """Raw pak path (from parse_dir_index) -> virtual game_rel, or None."""
     pl = pak_path.replace("\\", "/")
-    i  = pl.lower().find(_PREFIX_NEEDLE.lower())
-    if i < 0:
-        return None
-    rest = pl[i + _PREFIX_LEN:]
-    return rest[:-7] if rest.lower().endswith(".uasset") else None
+    pl_lower = pl.lower()
+    for pfx in _CONTENT_PREFIXES:
+        i = pl_lower.find(pfx.lower())
+        if i >= 0:
+            rest = pl[i + len(pfx):]
+            return rest[:-7] if rest.lower().endswith(".uasset") else None
+    return None
 
 
 def _ensure_gr_map():
@@ -40,10 +44,9 @@ def _ensure_gr_map():
         if _gr_map_ready:
             return
         from atelier.index import ensure_index
-        for path, cont in ensure_index():
-            gr = _path_to_gr(path)
-            if gr:
-                _gr_to_cont[gr.lower()] = cont
+        for virt_path, cont, _pfx in ensure_index():
+            gr = virt_path[:-7] if virt_path.lower().endswith(".uasset") else virt_path
+            _gr_to_cont[gr.lower()] = cont
         _gr_map_ready = True
 
 

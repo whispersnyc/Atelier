@@ -34,18 +34,13 @@ def decode_thumb(uasset_path, thumb_path):
 
 def extract_output_base(game_rel):
     """Return the exact path (no ext) where UAssetTool drops the extracted file.
-    Derived from the index virtual path, which already encodes the pak mount-point prefix.
-    Returns None if the asset isn't in the index.
-    When the same asset appears under different virtual-path prefixes (e.g. base pak uses
-    '../../../Marvel/' and a patch pak uses 'ent/Marvel/'), ensure_index returns both entries
-    in ascending-pak order.  We scan all matches and keep the last one so the highest-priority
-    (patch) pak's output prefix is used."""
+    Uses the content-mount prefix stored in the index so LQ assets resolve to the right path."""
     from atelier.index import ensure_index
-    suf = game_rel.lower() + ".uasset"
+    target = game_rel.lower() + ".uasset"
     result = None
-    for full_path, _ in ensure_index():
-        if full_path.lower().endswith(suf):
-            result = os.path.join(ASSETS, *full_path[:-7].split("/"))
+    for virt_path, _cont, pfx in ensure_index():
+        if virt_path.lower() == target:
+            result = os.path.join(ASSETS, *(pfx.rstrip("/") + "/" + virt_path[:-7]).split("/"))
     return result
 
 def find_extracted(game_rel):

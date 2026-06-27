@@ -2,7 +2,7 @@ import os, re, hashlib, threading, urllib.request
 from atelier.config import ROOT, IMPORT_ROOT
 from atelier.index import ensure_index
 from atelier.paths import (skin_entries, skin_rel, game_rel_for_skin,
-                           char_id as get_char_id, PAK_GAME_PREFIX)
+                           char_id as get_char_id)
 
 _REMOTE_MD_URL   = "https://raw.githubusercontent.com/donutman07/MarvelRivalsCharacterIDs/refs/heads/main/MarvelRivalsCharacterIDs.md"
 _update_callback = None   # set by routes.py to _push_sse after it's defined
@@ -119,7 +119,7 @@ def game_rel_from_token(tok):
 # (meshes, curves, blueprints, niagara systems, data tables, …) is hidden.
 LISTED_FILE_TYPES = ("material", "texture")
 
-def _classify_file(name):
+def _classify_file(name, rel_path=""):
     nl = name.lower()
     if nl.startswith("t_"):
         return "texture"
@@ -127,6 +127,9 @@ def _classify_file(name):
         return "vfx"
     if nl.startswith("mi_"):
         return "material"
+    # Path-context fallback: anything sitting inside a Textures folder is a texture.
+    if "/textures/" in ("/" + rel_path.lower() + "/"):
+        return "texture"
     return "other"
 
 def _label_folder(rel_path, folder_name):
@@ -142,21 +145,18 @@ def _label_folder(rel_path, folder_name):
     return folder_name
 
 def _browse_pak_level(rel_path):
-    """List immediate children (folders AND asset files) at rel_path
-    (relative to Marvel/Content/Marvel/) from the pak index."""
+    """List immediate children (folders AND asset files) at rel_path from the pak index.
+    rel_path is virtual (relative to the content mount, e.g. 'UI/Textures/HeroGallery_V3')."""
     rel_path   = rel_path.strip("/")
-    search_pfx = ((PAK_GAME_PREFIX + "/" + rel_path + "/") if rel_path
-                  else (PAK_GAME_PREFIX + "/")).lower()
+    search_pfx = (rel_path.lower() + "/") if rel_path else ""
 
     folders = {}  # lower_name -> original_name (first seen)
     files   = {}  # lower_name -> original_name (first seen), .uasset basenames sans ext
-    for pak_path_str, _ in ensure_index():
-        clean = re.sub(r"^(\.\./)+", "", pak_path_str.replace("\\", "/"))
-        cl    = clean.lower()
-        idx   = cl.find(search_pfx)
-        if idx < 0:
+    for virt_path, *_ in ensure_index():
+        vl = virt_path.lower()
+        if search_pfx and not vl.startswith(search_pfx):
             continue
-        rest = clean[idx + len(search_pfx):]
+        rest = virt_path[len(search_pfx):]
         if not rest:
             continue
         if "/" in rest:                          # descendant -> immediate subfolder
@@ -178,10 +178,10 @@ def _browse_pak_level(rel_path):
         result = sorted(pinned, key=lambda r: ROOT_PINNED.index(r["name"].lower())) + others
     for name_lower in sorted(files):
         name     = files[name_lower]
-        ft       = _classify_file(name)
+        ft       = _classify_file(name, rel_path)
         if ft not in LISTED_FILE_TYPES:        # hide meshes/curves/blueprints/vfx/etc.
             continue
-        gr       = f"{rel_path}/{name}" if rel_path else name   # storage-relative game_rel
+        gr       = f"{rel_path}/{name}" if rel_path else name
         is_mat   = ft == "material"
         base     = os.path.join(IMPORT_ROOT, *gr.split("/"))
         imported = os.path.exists(base + (".json" if is_mat else ".png"))
@@ -226,7 +226,7 @@ def _browse_skin(skin_id, subpath):
         result.append({"type": "folder", "name": name, "label": name, "rel_path": folders[name]})
     for name in sorted(files, key=str.lower):
         td     = files[name]
-        ft     = _classify_file(name)
+        ft     = _classify_file(name, td["rel_path"])
         if ft not in LISTED_FILE_TYPES:        # hide meshes/curves/blueprints/vfx/etc.
             continue
         base   = os.path.join(IMPORT_ROOT, *td["game_rel"].split("/"))
@@ -266,19 +266,18 @@ def browse_dispatch(path):
 
 def all_char_ids():
     seen = set()
-    for p, _ in ensure_index():
-        m = re.search(r"/Characters/(\d{4})/", p)
+    for p, *_ in ensure_index():
+        m = re.match(r"Characters/(\d{4})/", p, re.IGNORECASE)
         if m: seen.add(m.group(1))
     return sorted(seen)
 
 def char_skin_ids(cid):
-    seen   = set()
-    needle = f"/Characters/{cid}/".lower()
-    for p, _ in ensure_index():
+    seen = set()
+    pfx  = f"Characters/{cid}/".lower()
+    for p, *_ in ensure_index():
         pl = p.lower()
-        i  = pl.find(needle)
-        if i < 0: continue
-        rest = pl[i + len(needle):]
+        if not pl.startswith(pfx): continue
+        rest = pl[len(pfx):]
         sid  = rest.split("/")[0]
         if re.match(r"^\d{7}$", sid): seen.add(sid)
     return sorted(seen)

@@ -101,20 +101,21 @@ def api_prereqs():
 # ── first-run setup ───────────────────────────────────────────────────────────
 
 def _find_mr_root(path):
-    """Find the MarvelRivals ancestor of path (including path itself). Returns None if not found."""
+    """Find the game root by walking up path until */MarvelGame/Marvel/Content/Paks exists."""
     norm  = path.replace("\\", "/").rstrip("/")
     parts = norm.split("/")
-    for i in range(len(parts) - 1, -1, -1):
-        if parts[i].lower() == "marvelrivals":
-            return "/".join(parts[:i + 1])
+    for i in range(len(parts), 0, -1):
+        candidate = "/".join(parts[:i])
+        if os.path.isdir(candidate + "/MarvelGame/Marvel/Content/Paks"):
+            return candidate
     return None
 
 def _mr_root_to_display(paks_path):
-    """Given a stored Paks path, return the MarvelRivals root for display in the frontend."""
+    """Given a stored Paks path, return the game root for display in the frontend."""
     mr = _find_mr_root(paks_path)
     if mr:
         return mr
-    # Fallback for non-standard installs: strip the known paks suffix if present
+    # Fallback: strip the known paks suffix if present
     norm = paks_path.replace("\\", "/").rstrip("/")
     suffix = "/marvelgame/marvel/content/paks"
     if norm.lower().endswith(suffix):
@@ -182,15 +183,13 @@ def api_validate_paks():
     return json.dumps({"status": "ok"})
 
 def _validate_and_build_paks(path):
-    """Validate user-supplied path (MarvelRivals root or subfolder) and return (paks_path, error)."""
+    """Validate user-supplied path (game root or subfolder) and return (paks_path, error)."""
     mr = _find_mr_root(path)
     if not mr:
-        return None, "MarvelRivals folder not found in path"
-    if not os.path.isdir(mr):
-        return None, "MarvelRivals directory does not exist"
+        return None, "MarvelGame/Marvel/Content/Paks not found in path"
     paks = mr + "/MarvelGame/Marvel/Content/Paks"
     if not os.path.exists(paks + "/pakchunkCharacter-Windows.ucas"):
-        return None, "pakchunkCharacter-Windows.ucas not found — wrong MarvelRivals folder"
+        return None, "pakchunkCharacter-Windows.ucas not found — wrong folder"
     return paks, None
 
 @app.post("/api/save_paks")

@@ -4,7 +4,7 @@ import io_lib
 
 _INDEX      = None
 _CACHE_FILE = os.path.join(_CACHE, "cli_index_cache.json")
-_CACHE_VER  = "v6"  # bump to invalidate cached indexes
+_CACHE_VER  = "v7"  # bump to invalidate cached indexes
 
 # The two content mounts we care about.  Both map to the same virtual namespace.
 _CONTENT_PREFIXES = (
@@ -78,9 +78,11 @@ def ensure_index():
                 continue
             vp_key   = vp.lower()
             existing = seen.get(vp_key)
-            if existing is not None and not is_patch:
+            if existing is not None:
                 ex_pfx = existing[2]
-                # Don't let an LQ entry overwrite an already-stored HQ entry.
+                # Always prefer HQ over LQ — even if the LQ entry comes from a patch pak.
+                # Patch paks include both HQ and LQ entries; alphabetical pak order puts HQ
+                # first so the LQ entry would otherwise overwrite it.
                 if ex_pfx == "Marvel/Content/Marvel/" and pfx == "Marvel/Content/Marvel_LQ/":
                     continue
             seen[vp_key] = (vp, cont, pfx)

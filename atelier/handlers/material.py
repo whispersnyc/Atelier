@@ -1,5 +1,5 @@
 import os, json
-from atelier.config import IMPORT_ROOT, WORK_IMPORT_ROOT, PAKS, USMAP, _CACHE
+from atelier.config import WORK_IMPORT_ROOT, PAKS, USMAP, _CACHE, get_import_root
 from atelier.tools import uat
 from atelier.paths import pak_game_path
 
@@ -60,10 +60,11 @@ def _apply_mat_edits(d, colors, scalars):
             if pv is not None: pv["Value"] = float(scalars[nm])
 
 def mat_json(game_rel):
-    """Extract the MI + convert to JSON (flat in IMPORT_ROOT/<basename>.json). Returns the json path."""
+    """Extract the MI + convert to JSON (flat in active project dir as <basename>.json). Returns the json path."""
     import atelier.asset_cache as _ac
     from atelier.handlers.texture import extract_info, find_extracted
-    import_base = os.path.join(IMPORT_ROOT, os.path.basename(game_rel))
+    import_root = get_import_root()
+    import_base = os.path.join(import_root, os.path.basename(game_rel))
     jp = import_base + ".json"
     if os.path.exists(jp): return jp
     work_base = _ac.cache_base(game_rel)
@@ -80,8 +81,8 @@ def mat_json(game_rel):
             work_base = find_extracted(game_rel)
     if not work_base or not os.path.exists(work_base + ".uasset"):
         raise RuntimeError("material not found in game paks")
-    os.makedirs(IMPORT_ROOT, exist_ok=True)
-    uat(["to_json", os.path.abspath(work_base + ".uasset"), USMAP, os.path.abspath(IMPORT_ROOT)])
+    os.makedirs(import_root, exist_ok=True)
+    uat(["to_json", os.path.abspath(work_base + ".uasset"), USMAP, os.path.abspath(import_root)])
     if not os.path.exists(jp): raise RuntimeError("to_json produced no JSON")
     return jp
 
@@ -101,7 +102,7 @@ def save_material(game_rel, colors, scalars):
 
 def reset_material(game_rel):
     """Drop local edits: delete the cached JSON and re-derive vanilla params from the .uasset."""
-    jp = os.path.join(IMPORT_ROOT, os.path.basename(game_rel)) + ".json"
+    jp = os.path.join(get_import_root(), os.path.basename(game_rel)) + ".json"
     if os.path.exists(jp): os.remove(jp)
     return read_material(game_rel)
 

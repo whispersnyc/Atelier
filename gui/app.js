@@ -772,7 +772,7 @@ function updateExportBtn() {
 async function doExport() {
   const selected = Object.values(sidebarData).filter(i => i.selected);
   if (!selected.length) return;
-  const modName = document.getElementById("mod-name-input").value.trim() || "ModFilename";
+  const modName = document.getElementById("mod-name-input").value.trim() || _activeProjectName || "ModFilename";
   const exportable = selected.filter(i => ["texture", "material"].includes(i.file_type || ""));
   const skipped    = selected.length - exportable.length;
   if (!exportable.length) {
@@ -1318,9 +1318,20 @@ async function checkUpdate() {
 }
 
 // ── project picker ────────────────────────────────────────────────────────────
-let _projPickerResolve = null;
-let _projNameCtx       = null;
-let _projDeleteName    = null;
+let _projPickerResolve  = null;
+let _projNameCtx        = null;
+let _projDeleteName     = null;
+let _activeProjectName  = "";
+
+const _SAFE_NAME_RE = /[/\\:*?"<>|]/g;
+function _enforceSafeName(input) {
+  input.addEventListener("input", () => {
+    const clean = input.value.replace(_SAFE_NAME_RE, "");
+    if (clean !== input.value) input.value = clean;
+  });
+}
+_enforceSafeName(document.getElementById("proj-name-input"));
+_enforceSafeName(document.getElementById("mod-name-input"));
 
 async function checkProject() {
   const res = await api("/api/projects");
@@ -1413,12 +1424,20 @@ function _renderProjectPicker(projects) {
   lucide.createIcons({ nodes: [grid] });
 }
 
+function _applyActiveProject(name) {
+  _activeProjectName = name;
+  const modInput = document.getElementById("mod-name-input");
+  modInput.value       = name;
+  modInput.placeholder = name || "ModFilename";
+}
+
 async function _selectProject(name) {
   const r = await api("/api/project/select", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
   if (!r.ok) { toast(`Failed to open project: ${r.error}`, "warning"); return; }
+  _applyActiveProject(name);
   document.getElementById("project-overlay").classList.remove("active");
   if (_projPickerResolve) {
     const resolve = _projPickerResolve;

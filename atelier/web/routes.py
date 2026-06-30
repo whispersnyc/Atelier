@@ -1209,7 +1209,7 @@ def api_open_with():
 @app.post("/api/export")
 def api_export():
     body     = request.json or {}
-    mod_name = (body.get("mod_name") or "Mod").strip() or "Mod"
+    mod_name = re.sub(r'[/\\:*?"<>|.]', '', (body.get("mod_name") or "Mod").strip()) or "Mod"
     items    = body.get("items", [])
     if not items:
         response.content_type = "application/json"

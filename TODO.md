@@ -2,9 +2,9 @@ diagnose export times (manually seeks filenames instead of cached index/uasset p
 test pak override order
 preview thumbnails sometimes infinitely load until revisit/triggered refresh
 triggered refresh resets edited asset thumbnails to original
-F5 to refresh
 
 ### regular
+Menu: Refresh View, Show in Explorer, Back to Projects, Help/Info
 force focus on webview window when confirmed started
 confirmation before export files override files with same name
 descriptive spinner text during initial (extra long loading for index)
@@ -12,10 +12,9 @@ replace on-boot win11 toast with extremely fast lightweight splash screen
 add a ping system every 15 seconds (or websocket?) so accidentally orphaned server closes
 toggle select/deselect all when clicking the sidebar's circled number
 sidebar: path under material/vfx items dont show anything, its just '/', show path truncated instead
-hovering over item in sidebar should show tooltip with pak name + full path
+hovering over item in sidebar should show tooltip with pak name + full path (cache index)
 use webview max compatibility gui method, ex leave undefined if better compat
 during the prefill stage of initial configuration when config file doesnt exist, create one with the prefilled contents, "" if no input prefilled
-show atelier version number next to name on top-left, click to open repo page
 
 ### partially formed ideas
 better filetype classification system?

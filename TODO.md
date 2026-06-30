@@ -1,7 +1,8 @@
 diagnose export times (manually seeks filenames instead of cached index/uasset path?)
-test pak override order
+test pak override order, maybe write a test that checks cases where two patches override the same base asset to ensure latest patch's item is used
 preview thumbnails sometimes infinitely load until revisit/triggered refresh
 triggered refresh resets edited asset thumbnails to original
+keep reset data button updated during expansion
 
 ### regular
 Menu: Refresh View, Show in Explorer, Back to Projects, Help/Info (https://github.com/clownfetus/Atelier#usage)

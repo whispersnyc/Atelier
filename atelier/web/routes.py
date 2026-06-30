@@ -1163,6 +1163,63 @@ def api_open_explorer():
     return json.dumps({"ok": True})
 
 
+@app.post("/api/reset_data")
+def api_reset_data():
+    import atelier.config as _c
+    paths_to_remove = [
+        _c.ASSETS,
+        _c._CACHE,
+        os.path.join(ROOT, "_logs"),
+        os.path.join(_c.TOOLS, "Mappings"),
+        os.path.join(_c.TOOLS, "AES_KEY.txt"),
+    ]
+    for p in paths_to_remove:
+        try:
+            if os.path.isdir(p):   shutil.rmtree(p)
+            elif os.path.isfile(p): os.remove(p)
+        except Exception as e:
+            print(f"[reset] failed to remove {p}: {e}")
+    try:
+        with open(_c.CONFIG_FILE, "w", encoding="utf-8") as _f:
+            json.dump({}, _f)
+    except Exception as e:
+        print(f"[reset] failed to clear config: {e}")
+    # Reset in-memory state
+    _c.CONFIG_HAS_PAKS = False
+    _c._active_project = ""
+    try: _io_lib_mod.AES_KEY = b""
+    except Exception: pass
+    try:
+        import atelier.index as _idx_mod; _idx_mod._INDEX = None
+    except Exception: pass
+    try: _asset_cache._cache.clear()
+    except Exception: pass
+    try:
+        with _pak_thumb_mod._toc_lock:   _pak_thumb_mod._toc_cache.clear()
+        with _pak_thumb_mod._gr_map_lock: _pak_thumb_mod._gr_to_cont.clear()
+        _pak_thumb_mod._gr_map_ready = False
+    except Exception: pass
+    # Recreate projects root so the watchdog observer doesn't error
+    try: os.makedirs(PROJECTS_ROOT, exist_ok=True)
+    except Exception: pass
+    response.content_type = "application/json"
+    return json.dumps({"ok": True})
+
+
+@app.get("/api/open_projects_folder")
+def api_open_projects_folder():
+    active = get_active_project()
+    if active:
+        target = os.path.join(PROJECTS_ROOT, active)
+        if os.path.isdir(target):
+            _open_explorer_focused(["explorer.exe", f"/select,{os.path.abspath(target)}"])
+            response.content_type = "application/json"
+            return json.dumps({"ok": True})
+    _open_explorer_focused(["explorer.exe", os.path.abspath(PROJECTS_ROOT)])
+    response.content_type = "application/json"
+    return json.dumps({"ok": True})
+
+
 @app.post("/api/replace_texture")
 def api_replace_texture():
     from PIL import Image

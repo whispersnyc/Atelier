@@ -285,6 +285,30 @@
   </div>
 </div>
 
+<!-- ── reset data confirm ── -->
+<div class="overlay" id="reset-overlay">
+  <div class="modal">
+    <h2><i data-lucide="alert-triangle" size="18" style="color:var(--yellow)"></i> Reset All Data?</h2>
+    <p>The following will be permanently deleted:</p>
+    <ul style="margin:2px 0 0 18px;font-size:12px;color:var(--muted);line-height:2;list-style:disc">
+      <li>All projects and edited assets</li>
+      <li>Configuration (game path, AES key, USMAP)</li>
+      <li>Thumbnails cache and logs</li>
+    </ul>
+    <div class="warning">
+      <i data-lucide="alert-triangle" size="14" style="flex-shrink:0;margin-top:2px"></i>
+      <span>This cannot be undone. Atelier will revert to intial state.</span>
+    </div>
+    <div class="modal-row">
+      <button class="btn" id="reset-cancel">Cancel</button>
+      <button class="btn primary" id="reset-ok">
+        <i data-lucide="trash-2" size="14"></i>
+        Reset Everything
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ── context menu ── -->
 <div id="ctx-menu"></div>
 <input type="file" id="ctx-file-input" accept="image/*" style="display:none">

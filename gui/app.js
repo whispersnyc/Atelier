@@ -1530,10 +1530,40 @@ document.getElementById("proj-delete-ok").addEventListener("click", async () => 
   }
 });
 
-document.getElementById("menu-btn").addEventListener("click", async () => {
-  const res = await api("/api/projects");
-  _renderProjectPicker(res.projects || []);
-  document.getElementById("project-overlay").classList.add("active");
+document.getElementById("menu-btn").addEventListener("click", e => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  _ctxShow(
+    { preventDefault: () => {}, stopPropagation: () => e.stopPropagation(), clientX: rect.left, clientY: rect.bottom + 4 },
+    [
+      { icon: "folder-open", label: "Back to Projects", action: async () => {
+        const res = await api("/api/projects");
+        _renderProjectPicker(res.projects || []);
+        document.getElementById("project-overlay").classList.add("active");
+      }},
+      { icon: "refresh-cw", label: "Refresh View", action: () => renderGrid() },
+      { icon: "folder-search", label: "Show in Explorer", action: () => fetch("/api/open_projects_folder") },
+      { icon: "circle-help", label: "Help / Info", action: () => window.open("https://github.com/clownfetus/Atelier#usage", "_blank") },
+      "sep",
+      { icon: "trash-2", label: "Reset Data…", danger: true, action: () => document.getElementById("reset-overlay").classList.add("active") },
+    ]
+  );
+});
+
+document.getElementById("reset-cancel").addEventListener("click", () => {
+  document.getElementById("reset-overlay").classList.remove("active");
+});
+
+document.getElementById("reset-ok").addEventListener("click", async () => {
+  document.getElementById("reset-overlay").classList.remove("active");
+  const t = toastSpinner("Resetting…");
+  try {
+    await api("/api/reset_data", { method: "POST" });
+    t.remove();
+    window.location.reload();
+  } catch (e) {
+    t.remove();
+    toast(`Reset failed: ${e.message}`, "warning");
+  }
 });
 
 // ── initial load ──────────────────────────────────────────────────────────────

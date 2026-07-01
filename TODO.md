@@ -1,3 +1,5 @@
+viewport meshes seem horizontally compressed a little
+optimize 3d view re-open
 diagnose import/export times (ui mods for LQ using UAT fallback?)
 test pak override order, maybe write a test that checks cases where two patches override the same base asset to ensure latest patch's item is used
 

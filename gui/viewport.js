@@ -20,6 +20,7 @@ let matsByName = {};   // "MI_..." -> [THREE.Material, ...]   (mesh materials sh
 let matData    = {};   // "MI_..." -> {game_rel, colors:[{name,rgba}], scalars, baseIdx}
 let edited      = {};  // "MI_..." -> { paramName: [r,g,b,a] }  (unsaved session edits)
 let currentSkin = null;
+let objects     = [];  // [{ name, root: THREE.Object3D }] — one entry per top-level mesh added to modelRoot
 
 const clamp01 = v => Math.min(1, Math.max(0, v));
 
@@ -132,9 +133,47 @@ function disposeTree(obj) {
 function clearModel() {
   generation++;   // invalidate any in-flight texture loads from the previous model
   for (const ch of [...modelRoot.children]) { modelRoot.remove(ch); disposeTree(ch); }
-  matsByName = {}; matData = {}; edited = {}; currentSkin = null;
+  matsByName = {}; matData = {}; edited = {}; currentSkin = null; objects = [];
   const list = $('viewport-mat-list'); if (list) list.innerHTML = '';
-  $('viewport-materials').classList.add('empty');
+  const objList = $('viewport-obj-list'); if (objList) objList.innerHTML = '';
+  updateSidebarVisibility();
+}
+
+// Sidebar shows the Objects panel and/or Materials panel independently, and hides itself entirely
+// (full canvas width) only when there's nothing to show in either.
+function updateSidebarVisibility() {
+  const hasObjects = objects.length > 0;
+  const hasMats    = Object.keys(matData).length > 0;
+  $('viewport-obj-section').style.display = hasObjects ? 'flex' : 'none';
+  $('viewport-mat-section').style.display = hasMats ? 'flex' : 'none';
+  $('viewport-materials').classList.toggle('empty', !hasObjects && !hasMats);
+}
+
+// One row per top-level mesh loaded into modelRoot. Toggling hides/shows that mesh and re-frames
+// the camera — some skins carry extra objects (unused attachments, effects meshes, etc.) that are
+// wildly oversized or offset, which blows up the auto-framed scale and makes orbit/pan feel broken.
+function buildObjectPanel() {
+  const list = $('viewport-obj-list');
+  list.innerHTML = '';
+  for (const o of objects) {
+    const row = document.createElement('div');
+    row.className = 'vp-obj' + (o.root.visible ? '' : ' hidden-obj');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = o.root.visible;
+    cb.addEventListener('change', () => {
+      o.root.visible = cb.checked;
+      row.classList.toggle('hidden-obj', !cb.checked);
+      frameCamera();
+    });
+    const lbl = document.createElement('span');
+    lbl.textContent = o.name || 'Object';
+    lbl.title = o.name || '';
+    row.appendChild(cb); row.appendChild(lbl);
+    list.appendChild(row);
+  }
+  $('viewport-obj-count').textContent = objects.length + (objects.length === 1 ? ' object' : ' objects');
+  updateSidebarVisibility();
 }
 
 // Make a mesh material matte (glTF's default is fully metallic → renders black w/o env map) and
@@ -208,7 +247,10 @@ async function applyMatTexture(name, texGameRel, slot = 'map', ver = '0') {
 }
 
 function frameCamera() {
-  const box = new THREE.Box3().setFromObject(modelRoot);
+  // Frame only visible top-level objects — Box3 doesn't respect .visible on its own, and a toggled-
+  // off mesh (e.g. an oversized stray) would otherwise still blow out the auto-framed scale.
+  const box = new THREE.Box3();
+  for (const child of modelRoot.children) { if (child.visible) box.expandByObject(child); }
   if (box.isEmpty()) return;
   const size   = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
@@ -291,7 +333,6 @@ function buildPanel() {
   const list = $('viewport-mat-list');
   list.innerHTML = '';
   const names = Object.keys(matData).sort();
-  if (!names.length) { $('viewport-materials').classList.add('empty'); return; }
 
   for (const name of names) {
     const d = matData[name];
@@ -317,7 +358,7 @@ function buildPanel() {
     list.appendChild(wrap);
   }
   $('viewport-mat-count').textContent = names.length + (names.length === 1 ? ' material' : ' materials');
-  $('viewport-materials').classList.remove('empty');
+  updateSidebarVisibility();
   refreshFoot();
 }
 
@@ -402,12 +443,14 @@ async function open(skinId, title) {
         const gltf = await loader.loadAsync(`/api/model_gltf?game_rel=${encodeURIComponent(meshes[i].game_rel)}`);
         collectMats(gltf.scene);
         modelRoot.add(gltf.scene);
+        objects.push({ name: meshes[i].name, root: gltf.scene });
         loaded++;
         frameCamera();
       } catch (e) { console.warn('viewport: mesh load failed', meshes[i].name, e); }
     }
     $('viewport-status').textContent = loaded ? `${loaded} part${loaded !== 1 ? 's' : ''}` : '';
     if (!loaded) { $('viewport-loading-msg').textContent = 'Failed to load meshes.'; return; }
+    buildObjectPanel();
     frameCamera();
     $('viewport-loading').style.display = 'none';
     loadMaterials(skinId);
@@ -430,6 +473,8 @@ async function openMesh(gameRel, name, skinId) {
     const gltf = await loader.loadAsync(`/api/model_gltf?game_rel=${encodeURIComponent(gameRel)}`);
     collectMats(gltf.scene);
     modelRoot.add(gltf.scene);
+    objects.push({ name: name || 'Mesh', root: gltf.scene });
+    buildObjectPanel();
     frameCamera();
     $('viewport-status').textContent = name || '';
     $('viewport-loading').style.display = 'none';

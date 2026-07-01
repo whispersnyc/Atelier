@@ -765,6 +765,27 @@ body {
   background: var(--bg2); display: flex; flex-direction: column; min-height: 0;
 }
 #viewport-materials.empty { display: none; }
+
+#viewport-obj-section {
+  flex-shrink: 0; max-height: 160px;
+  display: flex; flex-direction: column; min-height: 0;
+  border-bottom: 1px solid var(--border);
+}
+#viewport-obj-head {
+  padding: 10px 14px; font-size: 12px; font-weight: 600; color: var(--text);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+}
+#viewport-obj-count { font-size: 11px; color: var(--muted); font-weight: 400; }
+#viewport-obj-list { overflow-y: auto; padding: 6px 10px; }
+.vp-obj { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.vp-obj input[type=checkbox] { flex-shrink: 0; cursor: pointer; }
+.vp-obj span {
+  font-size: 11px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vp-obj.hidden-obj span { color: var(--muted); text-decoration: line-through; }
+
+#viewport-mat-section { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #viewport-mat-head {
   padding: 10px 14px; font-size: 12px; font-weight: 600; color: var(--text);
   border-bottom: 1px solid var(--border);

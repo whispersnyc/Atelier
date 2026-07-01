@@ -1,4 +1,4 @@
-import os, json
+import os, json, shutil
 from atelier.config import WORK_IMPORT_ROOT, PAKS, USMAP, _CACHE, CACHE_3DVIEW, get_import_root
 from atelier.tools import uat
 from atelier.paths import pak_game_path
@@ -98,6 +98,13 @@ def mat_json(game_rel, out_dir=None):
     out_dir = out_dir or import_root
     jp = os.path.join(out_dir, os.path.basename(game_rel)) + ".json"
     if os.path.exists(jp): return jp
+    if out_dir != CACHE_3DVIEW:
+        # reuse the vanilla copy the viewport already cached instead of re-extracting from paks
+        cached_jp = os.path.join(CACHE_3DVIEW, os.path.basename(game_rel)) + ".json"
+        if os.path.exists(cached_jp):
+            os.makedirs(out_dir, exist_ok=True)
+            shutil.copyfile(cached_jp, jp)
+            return jp
     work_base = _ac.cache_base(game_rel)
     if not work_base or not os.path.exists(work_base + ".uasset"):
         pak_gr = pak_game_path(game_rel)
